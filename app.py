@@ -25,10 +25,6 @@ handler = SlackRequestHandler(app)
 def slack_events():
     return handler.handle(request)
 
-@app.event("app_mention")
-def handle_mentions(body, say):
-    user = body["event"]["user"]
-    say(f"<@{user}> メンションありがとう！")
 
 @app.event("message")
 def handle_message_events(body, say):
@@ -56,4 +52,5 @@ def handle_message_events(body, say):
         logger.info("📝 通常メッセージ: " + event.get("text", "（テキストなし）"))
 
 if __name__ == "__main__":
-    flask_app.run(port=3000)
+    port = int(os.environ.get("PORT", 3000))  # RenderはPORT環境変数を使う
+    flask_app.run(host="0.0.0.0", port=port)
