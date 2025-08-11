@@ -6,6 +6,7 @@ from flask import Flask, request
 from dotenv import load_dotenv
 import requests
 import boto3
+import csv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,25 +21,221 @@ app = App(
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app)
 
-# boto3 S3クライアント作成
-s3 = boto3.client(
-    service_name='s3',
-    aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
-    endpoint_url=os.getenv("R2_ENDPOINT")
-)
-
-def upload_file_to_r2(local_path, file_name):
-    bucket_name = os.getenv("R2_BUCKET_NAME")
-    with open(local_path, "rb") as f:
-        s3.upload_fileobj(f, bucket_name, file_name)
-    logger.info(f"R2にアップロード成功: {file_name}")
-
 # Slackのイベント受信用エンドポイント
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
     return handler.handle(request)
 
+dammyData = {
+        "name_jp": "山本一翔",
+        "name_en": "Kazuhiro Yamamoto",
+        "company": "株式会社ユニークビジョン",
+        "postal_code": "100-0001",
+        "address": "東京都千代田区1-1",
+        "email": "yamamoto@example.com",
+        "website": "https://example.com",
+        "phone": "03-1234-5678",
+    }
+
+
+@app.event("app_mention")
+def handle_mention(event, say):
+    # 応答
+    say("読み取り完了。\n")
+    say(f"名前: {dammyData['name_jp']}")
+    say(f"会社名: {dammyData['company']}")
+    say(f"会社住所: {dammyData['address']}")
+    say(f"Email: {dammyData['email']}")
+    say(f"ウェブサイト: {dammyData['website']}")
+    say(f"電話番号: {dammyData['phone']}")
+
+    blocks = [
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "保存する"
+                    },
+                    "style": "primary",
+                    "value": "save_text",
+                    "action_id": "save_text"
+                },
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "変更する"
+                    },
+                    "value": "edit_text",
+                    "action_id": "edit_text"
+                }
+            ]
+        }
+    ]
+    say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
+
+@app.action("save_text")
+def handle_save_text(ack, body, say):
+    ack()
+    file_path = "output.csv"
+
+    # 今回のデータ取得
+    keys = ["phone","name","address","email","company"]
+    values = [dammyData["phone"], dammyData["name_jp"], dammyData["address"], dammyData["email"], dammyData["company"]]
+    print(values)
+    # ファイルが存在しない → ヘッダーあり
+    file_exists = os.path.isfile(file_path)
+
+    with open(file_path, "a", encoding="utf-8", newline="") as f:
+        # 最初の1回だけヘッダーを書き込む
+        if not file_exists:
+            f.write(",".join(keys) + "\n")
+
+        # データ行を書き込む
+        f.write(",".join(values) + "\n")
+    say("保存しました。")
+
+@app.action("edit_text")
+def handle_edit_text(ack, body, say):
+    ack()
+    say("該当項目を変更してください。")
+    editBlocks = [
+        {
+            "type": "input",
+            "block_id": "edit_name",
+            "label": {
+                "type": "plain_text",
+                "text": "名前"
+            },
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "name",
+                "initial_value": f"{dammyData['name_jp']}"
+            }
+        },
+        {
+            "type": "input",
+            "block_id": "edit_company",
+            "label": {
+                "type": "plain_text",
+                "text": "会社名"
+            },
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "company",
+                "initial_value": f"{dammyData['company']}"
+            }
+        },
+        {
+            "type": "input",
+            "block_id": "edit_address",
+            "label": {
+                "type": "plain_text",
+                "text": "会社住所"
+            },
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "address",
+                "initial_value": f"{dammyData['address']}"
+            }
+        },
+        {
+            "type": "input",
+            "block_id": "edit_email",
+            "label": {
+                "type": "plain_text",
+                "text": "Email"
+            },
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "email",
+                "initial_value": f"{dammyData['email']}"
+            }
+        },
+        {
+            "type": "input",
+            "block_id": "edit_phone",
+            "label": {
+                "type": "plain_text",
+                "text": "電話番号"
+            },
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "phone",
+                "initial_value": f"{dammyData['phone']}"
+            }
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "変更を保存"
+                    },
+                    "style": "primary",
+                    "value": "save_changes",
+                    "action_id": "save_changes"
+                }
+            ]
+        }
+    ]
+    say(blocks=editBlocks, text="変更したい項目を選んでください")
+
+@app.action("save_changes")
+def handle_save_changes(ack, body, say):
+    ack()
+    changes = []
+    for block in body['state']['values']:
+        block_data = body['state']['values'][block]
+        for key, value in block_data.items():
+            display_key = ""
+            if key == "name":
+                display_key = "名前"
+                dammyData['name_jp'] = value['value']
+            elif key == "company":
+                display_key = "会社名"
+                dammyData['company'] = value['value']
+            elif key == "address":
+                display_key = "会社住所"
+                dammyData['address'] = value['value']
+            elif key == "email":
+                display_key = "Email"
+                dammyData['email'] = value['value']
+            elif key == "phone":
+                display_key = "電話番号"
+                dammyData['phone'] = value['value']
+            changes.append(f"{display_key}: {value['value']}")
+
+    say("変更内容を保存しました:\n" + "\n".join(changes))
+
+    file_path = "output.csv"
+
+    # 今回のデータ取得
+    keys = []
+    values = []
+
+    for block in body['state']['values']:
+        block_data = body['state']['values'][block]
+        for key, value in block_data.items():
+            keys.append(key)
+            values.append(value['value'])
+
+    # ファイルが存在しない → ヘッダーあり
+    file_exists = os.path.isfile(file_path)
+
+    with open(file_path, "a", encoding="utf-8", newline="") as f:
+
+        # 最初の1回だけヘッダーを書き込む
+        if not file_exists:
+            f.write(",".join(keys) + "\n")
+
+        # データ行を書き込む
+        f.write(",".join(values) + "\n")
 
 @app.event("message")
 def handle_message_events(body, say):
@@ -53,23 +250,6 @@ def handle_message_events(body, say):
             filename = f['name']
             logger.info(f"ファイル名: {filename}")
             logger.info(f"URL: {url}")
-
-            # ダウンロード＆保存
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                # 一時保存
-                with open(filename, 'wb') as img_file:
-                    img_file.write(response.content)
-                logger.info(f"保存完了: {filename}")
-
-                # R2にアップロード
-                r2_key = f"uploads/{filename}"
-                upload_file_to_r2(filename, r2_key)
-
-                # 一時ファイル削除（任意）
-                os.remove(filename)
-            else:
-                logger.error(f"ダウンロード失敗: {response.status_code}")
     else:
         logger.info("通常メッセージ: " + event.get("text", "（テキストなし）"))
 
