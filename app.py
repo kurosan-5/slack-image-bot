@@ -77,6 +77,7 @@ def handle_mention(event, say):
     ]
     say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
 
+
 @app.action("save_text")
 def handle_save_text(ack, body, say):
     ack()
