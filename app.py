@@ -163,6 +163,7 @@ Email: {dammyData['email']}
     ],
     text=f"Gmail作成リンク: {url}"
     )
+    
 
 
 @app.action("edit_text")
