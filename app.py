@@ -2,21 +2,43 @@ import os
 import logging
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
+from slack_sdk.oauth.installation_store.file import FileInstallationStore
+from slack_sdk.oauth.state_store.file import FileOAuthStateStore
+from slack_bolt.oauth.oauth_settings import OAuthSettings
 from flask import Flask, request
 from dotenv import load_dotenv
 import requests
 import boto3
 import csv
+from urllib.parse import urlencode
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-app = App(
-    token=os.environ["SLACK_BOT_TOKEN"],
-    signing_secret=os.environ["SLACK_SIGNING_SECRET"]
+oauth_settings = OAuthSettings(
+    client_id=os.environ["SLACK_CLIENT_ID"],
+    client_secret=os.environ["SLACK_CLIENT_SECRET"],
+    scopes=[  # GUIで付けているスコープと一致させる
+        "canvases:write",
+        "app_mentions:read",
+        "chat:write",
+        "channels:history",
+        "app_mentions:read",
+        "im:history",
+        "files:read",
+        "channels:history"     # 公開CHのmessage取得が要るなら
+    ],
+    installation_store=FileInstallationStore(base_dir="./.slack_install"),
+    state_store=FileOAuthStateStore(base_dir="./.slack_state", expiration_seconds=600),
 )
+
+app = App(
+    signing_secret=os.environ["SLACK_SIGNING_SECRET"],
+    oauth_settings=oauth_settings,
+)
+
 
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app)
@@ -25,6 +47,17 @@ handler = SlackRequestHandler(app)
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
     return handler.handle(request)
+
+# インストール開始URL（ブラウザで開く）
+@flask_app.route("/slack/install", methods=["GET"])
+def install():
+    return handler.handle(request)
+
+# OAuthリダイレクト受け取り（Slackの Redirect URL に登録する）
+@flask_app.route("/slack/oauth_redirect", methods=["GET"])
+def oauth_redirect():
+    return handler.handle(request)
+
 
 dammyData = {
         "name_jp": "山本一翔",
@@ -36,6 +69,18 @@ dammyData = {
         "website": "https://example.com",
         "phone": "03-1234-5678",
     }
+
+def gmail_compose_url(to: str, subject: str = "", body: str = "", account_index: int | None = None) -> str:
+    base = "https://mail.google.com/mail"
+    if account_index is not None:
+        base += f"/u/{account_index}"
+    params = {"fs": "1", "tf": "cm", "to": to}
+    if subject:
+        params["su"] = subject
+    if body:
+        params["body"] = body
+    # UTF-8でURLエンコード（日本語OK）
+    return f"{base}/?{urlencode(params)}"
 
 @app.event("app_mention")
 def handle_mention(event, say):
@@ -95,6 +140,30 @@ def handle_save_text(ack, body, say):
         # データ行を書き込む
         f.write(",".join(values) + "\n")
     say("保存しました。")
+
+    body_template = f"""こんにちは、{dammyData['name_jp']}さん。
+会社名: {dammyData['company']}
+会社住所: {dammyData['address']}
+Email: {dammyData['email']}
+ウェブサイト: {dammyData['website']}
+電話番号: {dammyData['phone']}"""
+
+    url = gmail_compose_url(
+        to=dammyData['email'],
+        subject=f"{dammyData['name_jp']}さんの名刺情報",
+        body=body_template,
+    )
+
+    say(
+    blocks=[
+        {"type":"section","text":{"type":"mrkdwn","text":"保存した内容をもとにGmailを送信:"}},
+        {"type":"actions","elements":[
+            {"type":"button","style":"primary","text":{"type":"plain_text","text":"Gmailで新規作成"},"url": url}
+        ]}
+    ],
+    text=f"Gmail作成リンク: {url}"
+    )
+
 
 @app.action("edit_text")
 def handle_edit_text(ack, body, say):
@@ -288,9 +357,13 @@ def handle_message_events(body, say):
             filename = f['name']
             logger.info(f"ファイル名: {filename}")
             logger.info(f"URL: {url}")
+
+
     else:
         logger.info("通常メッセージ: " + event.get("text", "（テキストなし）"))
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     flask_app.run(host="0.0.0.0", port=port)
+
+

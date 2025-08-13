@@ -1,2 +1,4 @@
 .env
 venv/
+.slack_install
+.slack_state
