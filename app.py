@@ -37,7 +37,6 @@ dammyData = {
         "phone": "03-1234-5678",
     }
 
-
 @app.event("app_mention")
 def handle_mention(event, say):
     # 応答
