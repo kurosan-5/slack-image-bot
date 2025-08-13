@@ -77,7 +77,6 @@ def handle_mention(event, say):
     ]
     say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
 
-
 @app.action("save_text")
 def handle_save_text(ack, body, say):
     ack()
@@ -86,7 +85,6 @@ def handle_save_text(ack, body, say):
     # 今回のデータ取得
     keys = ["phone","name","address","email","company"]
     values = [dammyData["phone"], dammyData["name_jp"], dammyData["address"], dammyData["email"], dammyData["company"]]
-    print(values)
     # ファイルが存在しない → ヘッダーあり
     file_exists = os.path.isfile(file_path)
 
@@ -240,7 +238,47 @@ def handle_save_changes(ack, body, say):
 
 @app.event("message")
 def handle_message_events(body, say):
+
     event = body.get("event", {})
+    # if event.get("subtype") is not None:
+    #     return
+    if event.get("channel_type") == "im":
+        say("読み取り完了。\n")
+        say(f"名前: {dammyData['name_jp']}")
+        say(f"会社名: {dammyData['company']}")
+        say(f"会社住所: {dammyData['address']}")
+        say(f"Email: {dammyData['email']}")
+        say(f"ウェブサイト: {dammyData['website']}")
+        say(f"電話番号: {dammyData['phone']}")
+
+        blocks = [
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "保存する"
+                        },
+                        "style": "primary",
+                        "value": "save_text",
+                        "action_id": "save_text"
+                    },
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "変更する"
+                        },
+                        "value": "edit_text",
+                        "action_id": "edit_text"
+                    }
+                ]
+            }
+        ]
+        say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
+
     headers = {
         "Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"
     }
