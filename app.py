@@ -20,16 +20,60 @@ import gspread
 from gemini import extract_from_bytes
 
 # ----------------- 基本設定 -----------------
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('app.log') if os.environ.get('ENVIRONMENT') == 'development' else logging.NullHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Slack Boltの特定の警告を抑制
+slack_bolt_logger = logging.getLogger("slack_bolt.App")
+slack_bolt_logger.setLevel(logging.ERROR)
+
 load_dotenv()
+
+# 必要な環境変数をチェック
+def check_environment_variables():
+    required_vars = [
+        "SLACK_CLIENT_ID",
+        "SLACK_CLIENT_SECRET",
+        "SLACK_SIGNING_SECRET",
+        "DATABASE_URL",
+        "GEMINI_API_KEY"
+    ]
+
+    missing_vars = []
+    for var in required_vars:
+        if not os.environ.get(var):
+            missing_vars.append(var)
+
+    if missing_vars:
+        logger.error(f"必要な環境変数が設定されていません: {missing_vars}")
+        raise ValueError(f"Missing required environment variables: {missing_vars}")
+
+    logger.info("環境変数チェック完了")
+
+# 環境変数チェックを実行
+check_environment_variables()
 
 # ----------------- OAuth 設定 -----------------
 def create_oauth_settings():
     database_url = os.environ.get("DATABASE_URL")
+    logger.info(f"データベースURL: {database_url[:50]}..." if database_url else "データベースURL未設定")
 
     # SQLAlchemy Engine を作成
-    engine = create_engine(database_url)
+    try:
+        engine = create_engine(database_url)
+        # 接続テスト
+        with engine.connect() as conn:
+            logger.info("データベース接続テスト成功")
+    except Exception as e:
+        logger.exception(f"データベース接続エラー: {e}")
+        raise
 
     installation_store = SQLAlchemyInstallationStore(
         client_id=os.environ["SLACK_CLIENT_ID"],
@@ -69,17 +113,60 @@ app = App(
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app)
 
+# リクエスト/レスポンスのロギング
+@flask_app.before_request
+def log_request_info():
+    logger.info(f"Request: {request.method} {request.path}")
+    logger.debug(f"Headers: {dict(request.headers)}")
+    if request.method == "POST":
+        logger.debug(f"Data: {request.get_data()[:500]}...")  # 最初の500文字のみ
+
+@flask_app.after_request
+def log_response_info(response):
+    logger.info(f"Response: {response.status_code}")
+    return response
+
+# Flask エラーハンドラー
+@flask_app.errorhandler(400)
+def handle_400_error(e):
+    logger.error(f"400 Bad Request: {e}")
+    return {"error": "Bad Request", "message": str(e)}, 400
+
+@flask_app.errorhandler(500)
+def handle_500_error(e):
+    logger.exception(f"500 Internal Server Error: {e}")
+    return {"error": "Internal Server Error", "message": str(e)}, 500
+
+@flask_app.errorhandler(Exception)
+def handle_generic_error(e):
+    logger.exception(f"Unhandled exception: {e}")
+    return {"error": "Internal Server Error", "message": str(e)}, 500
+
 # ----------------- 便利ヘルパー -----------------
 def gmail_compose_url(to: str, subject: str = "", body: str = "", account_index: int | None = None) -> str:
-    base = "https://mail.google.com/mail"
-    if account_index is not None:
-        base += f"/u/{account_index}"
-    params = {"fs": "1", "tf": "cm", "to": to}
-    if subject:
-        params["su"] = subject
-    if body:
-        params["body"] = body
-    return f"{base}/?{urlencode(params)}"
+    try:
+        logger.debug(f"Gmail URL作成開始 - to: {to}, subject: {subject[:50]}...")
+
+        if not to or "@" not in to:
+            logger.warning(f"無効なメールアドレス: {to}")
+            raise ValueError(f"Invalid email address: {to}")
+
+        base = "https://mail.google.com/mail"
+        if account_index is not None:
+            base += f"/u/{account_index}"
+        params = {"fs": "1", "tf": "cm", "to": to}
+        if subject:
+            params["su"] = subject
+        if body:
+            params["body"] = body
+
+        url = f"{base}/?{urlencode(params)}"
+        logger.debug(f"Gmail URL作成完了: {url[:100]}...")
+        return url
+
+    except Exception as e:
+        logger.exception(f"Gmail URL作成エラー: {e}")
+        raise
 
 def fetch_slack_private_file(url_private: str, bot_token: str) -> bytes:
     headers = {"Authorization": f"Bearer {bot_token}"}
@@ -147,15 +234,42 @@ def export_to_existing_sheet(data):
 # ----------------- ルーティング（OAuth / Events） -----------------
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
-    return handler.handle(request)
+    try:
+        logger.info("Slack events エンドポイントが呼び出されました")
+        logger.debug(f"Request headers: {dict(request.headers)}")
+        logger.debug(f"Request data: {request.get_data()}")
+        result = handler.handle(request)
+        logger.info("Slack events 処理完了")
+        return result
+    except Exception as e:
+        logger.exception(f"Slack events エンドポイントでエラー: {e}")
+        raise
 
 @flask_app.route("/slack/install", methods=["GET"])
 def install():
-    return handler.handle(request)
+    try:
+        logger.info("Slack install エンドポイントが呼び出されました")
+        result = handler.handle(request)
+        logger.info("Slack install 処理完了")
+        return result
+    except Exception as e:
+        logger.exception(f"Slack install エンドポイントでエラー: {e}")
+        raise
 
 @flask_app.route("/slack/oauth_redirect", methods=["GET"])
 def oauth_redirect():
-    return handler.handle(request)
+    try:
+        logger.info("Slack oauth_redirect エンドポイントが呼び出されました")
+        result = handler.handle(request)
+        logger.info("Slack oauth_redirect 処理完了")
+        return result
+    except Exception as e:
+        logger.exception(f"Slack oauth_redirect エンドポイントでエラー: {e}")
+        raise
+
+@flask_app.route("/health", methods=["GET"])
+def health_check():
+    return {"status": "ok", "message": "Application is running"}
 
 # ----------------- 表示用データ（Gemini結果が入る） -----------------
 scanData = {
@@ -193,106 +307,215 @@ def handle_mention(event, say):
 
 @app.action("save_text")
 def handle_save_text(ack, body, say):
-    ack()
-    say("保存しました。")
+    try:
+        logger.info("保存ボタンが押されました")
+        logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
 
-    body_template = (
-        f"こんにちは、{scanData['name_jp']}さん。\n"
-        f"会社名: {scanData['company']}\n"
-        f"会社住所: {scanData['address']}\n"
-        f"Email: {scanData['email']}\n"
-        f"ウェブサイト: {scanData['website']}\n"
-        f"電話番号: {scanData['phone']}"
-    )
-    url = gmail_compose_url(
-        to=scanData["email"],
-        subject=f"{scanData['name_jp']}さんの名刺情報",
-        body=body_template,
-    )
+        ack()
+        logger.info("ACK完了")
 
-    say(
-        blocks=[
-            {"type": "section", "text": {"type": "mrkdwn", "text": "保存した内容をもとにGmailを送信:"}},
-            {"type": "actions", "elements": [
-                {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "Gmailで新規作成"}, "url": url}
-            ]},
-        ],
-        text=f"Gmail作成リンク: {url}",
-    )
+        # データの検証
+        if not scanData.get('email'):
+            logger.warning("メールアドレスが設定されていません")
+            say("⚠️ メールアドレスが設定されていないため、Gmail作成リンクを生成できません。")
+            return
+
+        say("保存しました。")
+        logger.info("保存完了メッセージ送信完了")
+
+        body_template = (
+            f"こんにちは、{scanData['name_jp']}さん。\n"
+            f"会社名: {scanData['company']}\n"
+            f"会社住所: {scanData['address']}\n"
+            f"Email: {scanData['email']}\n"
+            f"ウェブサイト: {scanData['website']}\n"
+            f"電話番号: {scanData['phone']}"
+        )
+
+        logger.info(f"Gmail作成用のメールアドレス: {scanData['email']}")
+
+        url = gmail_compose_url(
+            to=scanData["email"],
+            subject=f"{scanData['name_jp']}さんの名刺情報",
+            body=body_template,
+        )
+
+        logger.info(f"生成されたGmail URL: {url}")
+
+        say(
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": "保存した内容をもとにGmailを送信:"}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "Gmailで新規作成"}, "url": url}
+                ]},
+            ],
+            text=f"Gmail作成リンク: {url}",
+        )
+
+        logger.info("Gmail作成リンク送信完了")
+
+    except Exception as e:
+        logger.exception(f"save_text ハンドラーでエラーが発生: {e}")
+        try:
+            say(f"❌ エラーが発生しました: {str(e)}")
+        except Exception as say_error:
+            logger.exception(f"エラーメッセージの送信にも失敗: {say_error}")
 
 @app.action("edit_text")
 def handle_edit_text(ack, body, say):
-    ack()
-    say("該当項目を変更してください。")
-    editBlocks = [
-        {
-            "type": "input",
-            "block_id": "edit_name",
-            "label": {"type": "plain_text", "text": "名前"},
-            "element": {"type": "plain_text_input", "action_id": "name", "initial_value": f"{scanData['name_jp']}"},
-        },
-        {
-            "type": "input",
-            "block_id": "edit_company",
-            "label": {"type": "plain_text", "text": "会社名"},
-            "element": {"type": "plain_text_input", "action_id": "company", "initial_value": f"{scanData['company']}"},
-        },
-        {
-            "type": "input",
-            "block_id": "edit_address",
-            "label": {"type": "plain_text", "text": "会社住所"},
-            "element": {"type": "plain_text_input", "action_id": "address", "initial_value": f"{scanData['address']}"},
-        },
-        {
-            "type": "input",
-            "block_id": "edit_email",
-            "label": {"type": "plain_text", "text": "Email"},
-            "element": {"type": "plain_text_input", "action_id": "email", "initial_value": f"{scanData['email']}"},
-        },
-        {
-            "type": "input",
-            "block_id": "edit_phone",
-            "label": {"type": "plain_text", "text": "電話番号"},
-            "element": {"type": "plain_text_input", "action_id": "phone", "initial_value": f"{scanData['phone']}"},
-        },
-        {
-            "type": "actions",
-            "elements": [
-                {"type": "button", "text": {"type": "plain_text", "text": "変更を保存"}, "style": "primary", "value": "save_changes", "action_id": "save_changes"}
-            ],
-        },
-    ]
-    say(blocks=editBlocks, text="変更したい項目を選んでください")
+    try:
+        logger.info("変更ボタンが押されました")
+        logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
+
+        ack()
+        logger.info("ACK完了")
+
+        say("該当項目を変更してください。")
+        logger.info("変更画面表示メッセージ送信完了")
+
+        editBlocks = [
+            {
+                "type": "input",
+                "block_id": "edit_name",
+                "label": {"type": "plain_text", "text": "名前"},
+                "element": {"type": "plain_text_input", "action_id": "name", "initial_value": f"{scanData['name_jp']}"},
+            },
+            {
+                "type": "input",
+                "block_id": "edit_company",
+                "label": {"type": "plain_text", "text": "会社名"},
+                "element": {"type": "plain_text_input", "action_id": "company", "initial_value": f"{scanData['company']}"},
+            },
+            {
+                "type": "input",
+                "block_id": "edit_address",
+                "label": {"type": "plain_text", "text": "会社住所"},
+                "element": {"type": "plain_text_input", "action_id": "address", "initial_value": f"{scanData['address']}"},
+            },
+            {
+                "type": "input",
+                "block_id": "edit_email",
+                "label": {"type": "plain_text", "text": "Email"},
+                "element": {"type": "plain_text_input", "action_id": "email", "initial_value": f"{scanData['email']}"},
+            },
+            {
+                "type": "input",
+                "block_id": "edit_phone",
+                "label": {"type": "plain_text", "text": "電話番号"},
+                "element": {"type": "plain_text_input", "action_id": "phone", "initial_value": f"{scanData['phone']}"},
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "変更を保存"}, "style": "primary", "value": "save_changes", "action_id": "save_changes"}
+                ],
+            },
+        ]
+
+        logger.info("編集フォームを送信中...")
+        say(blocks=editBlocks, text="変更したい項目を選んでください")
+        logger.info("編集フォーム送信完了")
+
+    except Exception as e:
+        logger.exception(f"edit_text ハンドラーでエラーが発生: {e}")
+        try:
+            say(f"❌ エラーが発生しました: {str(e)}")
+        except Exception as say_error:
+            logger.exception(f"エラーメッセージの送信にも失敗: {say_error}")
 
 @app.action("save_changes")
 def handle_save_changes(ack, body, say):
-    ack()
-    changes = []
-    for block in body["state"]["values"]:
-        block_data = body["state"]["values"][block]
-        for key, value in block_data.items():
-            display_key = ""
-            if key == "name":
-                display_key = "名前"
-                scanData["name_jp"] = value["value"]
-            elif key == "company":
-                display_key = "会社名"
-                scanData["company"] = value["value"]
-            elif key == "address":
-                display_key = "会社住所"
-                scanData["address"] = value["value"]
-            elif key == "email":
-                display_key = "Email"
-                scanData["email"] = value["value"]
-            elif key == "phone":
-                display_key = "電話番号"
-                scanData["phone"] = value["value"]
-            changes.append(f"{display_key}: {value['value']}")
-    say("変更内容を保存しました:\n" + "\n".join(changes))
+    try:
+        logger.info("変更保存ボタンが押されました")
+        logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
 
-    body_template = (
-        f"こんにちは、{scanData['name_jp']}さん。\n"
-        f"会社名: {scanData['company']}\n"
+        ack()
+        logger.info("ACK完了")
+
+        changes = []
+        state_values = body.get("state", {}).get("values", {})
+
+        if not state_values:
+            logger.warning("state.values が空です")
+            say("❌ フォームデータが取得できませんでした。もう一度お試しください。")
+            return
+
+        logger.info(f"State values: {json.dumps(state_values, indent=2, ensure_ascii=False)}")
+
+        for block in state_values:
+            block_data = state_values[block]
+            for key, value in block_data.items():
+                display_key = ""
+                new_value = value.get("value", "")
+
+                if key == "name":
+                    display_key = "名前"
+                    scanData["name_jp"] = new_value
+                elif key == "company":
+                    display_key = "会社名"
+                    scanData["company"] = new_value
+                elif key == "address":
+                    display_key = "会社住所"
+                    scanData["address"] = new_value
+                elif key == "email":
+                    display_key = "Email"
+                    scanData["email"] = new_value
+                elif key == "phone":
+                    display_key = "電話番号"
+                    scanData["phone"] = new_value
+
+                if display_key:
+                    changes.append(f"{display_key}: {new_value}")
+                    logger.info(f"{display_key} を {new_value} に更新")
+
+        if not changes:
+            logger.warning("変更内容がありません")
+            say("❌ 変更内容が検出されませんでした。")
+            return
+
+        say("変更内容を保存しました:\n" + "\n".join(changes))
+        logger.info("変更保存完了メッセージ送信完了")
+
+        body_template = (
+            f"こんにちは、{scanData['name_jp']}さん。\n"
+            f"会社名: {scanData['company']}\n"
+            f"会社住所: {scanData['address']}\n"
+            f"Email: {scanData['email']}\n"
+            f"ウェブサイト: {scanData['website']}\n"
+            f"電話番号: {scanData['phone']}"
+        )
+
+        if not scanData.get('email'):
+            logger.warning("メールアドレスが設定されていません")
+            say("⚠️ メールアドレスが設定されていないため、Gmail作成リンクを生成できません。")
+            return
+
+        url = gmail_compose_url(
+            to=scanData["email"],
+            subject=f"{scanData['name_jp']}さんの名刺情報",
+            body=body_template,
+        )
+
+        logger.info(f"生成されたGmail URL: {url}")
+
+        say(
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": "保存した内容をもとにGmailを送信:"}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "Gmailで新規作成"}, "url": url}
+                ]},
+            ],
+            text=f"Gmail作成リンク: {url}",
+        )
+
+        logger.info("Gmail作成リンク送信完了")
+
+    except Exception as e:
+        logger.exception(f"save_changes ハンドラーでエラーが発生: {e}")
+        try:
+            say(f"❌ エラーが発生しました: {str(e)}")
+        except Exception as say_error:
+            logger.exception(f"エラーメッセージの送信にも失敗: {say_error}")
         f"会社住所: {scanData['address']}\n"
         f"Email: {scanData['email']}\n"
         f"ウェブサイト: {scanData['website']}\n"
@@ -406,5 +629,25 @@ def handle_message_events(body, say, context):
 
 # ----------------- 起動 -----------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 3000))
-    flask_app.run(host="0.0.0.0", port=port)
+    try:
+        # 起動時の環境情報をログ出力
+        logger.info("=== アプリケーション起動開始 ===")
+        logger.info(f"Python version: {os.sys.version}")
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Environment: {os.environ.get('ENVIRONMENT', 'production')}")
+
+        port = int(os.environ.get("PORT", 3000))
+        logger.info(f"Starting Flask app on port {port}")
+
+        # 本番環境の場合はデバッグモードを無効にする
+        debug_mode = os.environ.get('ENVIRONMENT') == 'development'
+
+        flask_app.run(
+            host="0.0.0.0",
+            port=port,
+            debug=debug_mode
+        )
+
+    except Exception as e:
+        logger.exception(f"アプリケーション起動エラー: {e}")
+        raise
