@@ -520,7 +520,6 @@ def handle_save_changes(ack, body, say):
         f"Email: {scanData['email']}\n"
         f"ウェブサイト: {scanData['website']}\n"
         f"電話番号: {scanData['phone']}"
-    )
     url = gmail_compose_url(
         to=scanData["email"],
         subject=f"{scanData['name_jp']}さんの名刺情報",
