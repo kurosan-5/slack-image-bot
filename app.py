@@ -20,8 +20,11 @@ import gspread
 from gemini import extract_from_bytes
 
 # ----------------- 基本設定 -----------------
+# 本番環境ではINFO、開発環境ではDEBUGレベルを使用
+log_level = logging.DEBUG if os.environ.get('ENVIRONMENT') == 'development' else logging.INFO
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
@@ -116,17 +119,39 @@ handler = SlackRequestHandler(app)
 # リクエスト/レスポンスのロギング
 @flask_app.before_request
 def log_request_info():
-    logger.info(f"Request: {request.method} {request.path}")
-    logger.debug(f"Headers: {dict(request.headers)}")
-    if request.method == "POST":
-        logger.debug(f"Data: {request.get_data()[:500]}...")  # 最初の500文字のみ
+    # よくある404リクエストを特定
+    common_404_paths = [
+        '/robots.txt', '/sitemap.xml', '/wp-admin/', '/admin/',
+        '/wp-login.php', '/.env', '/config', '/api/v1/', '/graphql'
+    ]
+
+    is_common_404 = any(request.path.startswith(path) for path in common_404_paths)
+
+    if is_common_404:
+        logger.info(f"Common 404 path accessed: {request.method} {request.path} from {request.remote_addr}")
+    else:
+        logger.info(f"Request: {request.method} {request.path}")
+        logger.debug(f"Full URL: {request.url}")
+        logger.debug(f"Remote addr: {request.remote_addr}")
+        logger.debug(f"User-Agent: {request.headers.get('User-Agent', 'N/A')}")
+        logger.debug(f"Headers: {dict(request.headers)}")
+        if request.method == "POST":
+            logger.debug(f"Data: {request.get_data()[:500]}...")  # 最初の500文字のみ
 
 @flask_app.after_request
 def log_response_info(response):
-    logger.info(f"Response: {response.status_code}")
+    # 404以外、または重要なパスの404のみログ出力
+    if response.status_code != 404 or request.path.startswith('/slack/'):
+        logger.info(f"Response: {response.status_code} for {request.method} {request.path}")
     return response
 
 # Flask エラーハンドラー
+@flask_app.errorhandler(404)
+def handle_404_error(e):
+    logger.warning(f"404 Not Found: {request.method} {request.path} - {e}")
+    logger.debug(f"Request headers: {dict(request.headers)}")
+    return {"error": "Not Found", "message": f"Path {request.path} not found", "available_paths": ["/health", "/slack/events", "/slack/install", "/slack/oauth_redirect"]}, 404
+
 @flask_app.errorhandler(400)
 def handle_400_error(e):
     logger.error(f"400 Bad Request: {e}")
@@ -232,6 +257,46 @@ def export_to_existing_sheet(data):
 # print(f"Google Sheets URL: {sheet_url}")
 
 # ----------------- ルーティング（OAuth / Events） -----------------
+@flask_app.route("/", methods=["GET"])
+def root():
+    logger.info("ルートパス（/）にアクセスされました")
+    return {
+        "status": "ok",
+        "message": "Slack Image Bot is running",
+        "endpoints": {
+            "/health": "Health check",
+            "/slack/events": "Slack events endpoint",
+            "/slack/install": "Slack app installation",
+            "/slack/oauth_redirect": "OAuth redirect"
+        }
+    }
+
+@flask_app.route("/robots.txt", methods=["GET"])
+def robots_txt():
+    logger.info("robots.txt にアクセスされました")
+    return "User-agent: *\nDisallow: /\n", 200, {'Content-Type': 'text/plain'}
+
+@flask_app.route("/favicon.ico", methods=["GET"])
+def favicon():
+    logger.info("favicon.ico にアクセスされました")
+    return "", 204  # No Content
+
+# 一般的なボット攻撃パスを処理
+@flask_app.route("/<path:path>", methods=["GET", "POST"])
+def catch_all(path):
+    # WordPress、admin、API攻撃などをブロック
+    blocked_patterns = [
+        'wp-', 'admin', 'login', 'config', '.env', 'api/v1',
+        'graphql', 'xmlrpc', 'phpmyadmin', '.git', 'swagger'
+    ]
+
+    if any(pattern in path.lower() for pattern in blocked_patterns):
+        logger.warning(f"ブロックされたパス: {request.method} /{path} from {request.remote_addr}")
+        return {"error": "Forbidden"}, 403
+
+    logger.warning(f"未定義のパス: {request.method} /{path} from {request.remote_addr}")
+    return {"error": "Not Found", "message": f"Path /{path} not found"}, 404
+
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
     try:
