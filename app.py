@@ -1,4 +1,3 @@
-# app.py
 import os
 import logging
 from slack_bolt import App
@@ -7,6 +6,7 @@ from slack_sdk.oauth.installation_store.file import FileInstallationStore
 from slack_sdk.oauth.state_store.file import FileOAuthStateStore
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.oauth.state_store.sqlalchemy import SQLAlchemyOAuthStateStore
+from sqlalchemy import create_engine
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 import json
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
-# Gemini 解析（gemini.py に extract_from_bytes を実装してください）
+# Gemini 解析
 from gemini import extract_from_bytes
 
 # ----------------- 基本設定 -----------------
@@ -26,41 +26,38 @@ load_dotenv()
 
 # ----------------- OAuth 設定 -----------------
 def create_oauth_settings():
-    """環境に応じてOAuth設定を作成"""
     database_url = os.environ.get("DATABASE_URL")
 
-    if database_url and os.environ.get("ENVIRONMENT") == "production":
-        # 本番環境: データベースを使用
-        logger.info("Using database-based installation store")
-        installation_store = SQLAlchemyInstallationStore(
-            database_url=database_url,
-            logger=logger,
-        )
-        state_store = SQLAlchemyOAuthStateStore(
-            database_url=database_url,
-            expiration_seconds=600,
-            logger=logger,
-        )
-    else:
-        # 開発環境: ファイルベースを使用
-        logger.info("Using file-based installation store")
-        installation_store = FileInstallationStore(base_dir="./.slack_install")
-        state_store = FileOAuthStateStore(base_dir="./.slack_state", expiration_seconds=600)
+    # SQLAlchemy Engine を作成
+    engine = create_engine(database_url)
+
+    installation_store = SQLAlchemyInstallationStore(
+        client_id=os.environ["SLACK_CLIENT_ID"],
+        engine=engine,
+        logger=logger,
+    )
+    state_store = SQLAlchemyOAuthStateStore(
+        engine=engine,
+        expiration_seconds=600,
+        logger=logger,
+    )
 
     return OAuthSettings(
         client_id=os.environ["SLACK_CLIENT_ID"],
         client_secret=os.environ["SLACK_CLIENT_SECRET"],
         scopes=[
             "app_mentions:read",
+            "channels:read",
             "chat:write",
-            "im:history",
             "files:read",
-            "channels:history",
-            "canvases:write",
+            "im:history",
+            "im:read",
+            "im:write",
         ],
         installation_store=installation_store,
         state_store=state_store,
     )
+
 
 oauth_settings = create_oauth_settings()
 
