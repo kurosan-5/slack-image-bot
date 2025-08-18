@@ -2,7 +2,11 @@
 import io, os, json
 from typing import Dict, Any
 from PIL import Image
+from pillow_heif import register_heif_opener
 import google.generativeai as genai
+
+# HEICファイルサポートを有効にする
+register_heif_opener()
 
 MODEL = "gemini-2.5-flash-lite"
 
@@ -26,7 +30,17 @@ SYSTEM_PROMPT = (
 )
 
 def _bytes_to_pil(b: bytes) -> Image.Image:
-  return Image.open(io.BytesIO(b)).convert("RGB")
+  try:
+    img = Image.open(io.BytesIO(b))
+    # 形式を確認してログ出力
+    print(f"Image format detected: {img.format}")
+    return img.convert("RGB")
+  except Exception as e:
+    print(f"Error opening image: {type(e).__name__}: {e}")
+    # より詳細なエラー情報を提供
+    print(f"Image bytes length: {len(b)}")
+    print(f"First 20 bytes: {b[:20]}")
+    raise
 
 def extract_from_bytes(image_bytes: bytes) -> Dict[str, Any]:
   genai.configure(api_key=os.environ["GEMINI_API_KEY"])

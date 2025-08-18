@@ -2,3 +2,6 @@
 venv/
 .slack_install
 .slack_state
+__pycache__/*
+.slack_install/*
+.slack_state/*
