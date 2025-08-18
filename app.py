@@ -194,20 +194,6 @@ def handle_mention(event, say):
 @app.action("save_text")
 def handle_save_text(ack, body, say):
     ack()
-    # file_path = "output.csv"
-    # keys = ["phone", "name", "address", "email", "company"]
-    # values = [
-    #     scanData.get("phone", ""),
-    #     scanData.get("name_jp", ""),
-    #     scanData.get("address", ""),
-    #     scanData.get("email", ""),
-    #     scanData.get("company", ""),
-    # ]
-    # file_exists = os.path.isfile(file_path)
-    # with open(file_path, "a", encoding="utf-8", newline="") as f:
-    #     if not file_exists:
-    #         f.write(",".join(keys) + "\n")
-    #     f.write(",".join(values) + "\n")
     say("保存しました。")
 
     body_template = (
@@ -303,20 +289,6 @@ def handle_save_changes(ack, body, say):
                 scanData["phone"] = value["value"]
             changes.append(f"{display_key}: {value['value']}")
     say("変更内容を保存しました:\n" + "\n".join(changes))
-
-    # 任意：編集結果をCSVに追記（フォームの key 名が列名になる）
-    # file_path = "output.csv"
-    # keys, values = [], []
-    # for block in body["state"]["values"]:
-    #     block_data = body["state"]["values"][block]
-    #     for key, value in block_data.items():
-    #         keys.append(key)
-    #         values.append(value["value"])
-    # file_exists = os.path.isfile(file_path)
-    # with open(file_path, "a", encoding="utf-8", newline="") as f:
-    #     if not file_exists:
-    #         f.write(",".join(keys) + "\n")
-    #     f.write(",".join(values) + "\n")
 
     body_template = (
         f"こんにちは、{scanData['name_jp']}さん。\n"
