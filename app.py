@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from slack_sdk.oauth.installation_store.file import FileInstallationStore
@@ -7,6 +8,7 @@ from slack_sdk.oauth.state_store.file import FileOAuthStateStore
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.oauth.state_store.sqlalchemy import SQLAlchemyOAuthStateStore
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError, DisconnectionError
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -57,9 +59,24 @@ load_dotenv()
 def create_oauth_settings():
     database_url = os.environ.get("DATABASE_URL")
 
-    # SQLAlchemy Engine を作成
+    # SQLAlchemy Engine を作成（接続プール設定付き）
     try:
-        engine = create_engine(database_url)
+        engine = create_engine(
+            database_url,
+            # 接続プール設定
+            pool_size=5,                    # 基本的な接続プールサイズ
+            max_overflow=10,                # 追加で作成可能な接続数
+            pool_timeout=30,                # 接続取得のタイムアウト（秒）
+            pool_recycle=1800,              # 接続を再利用する前にリサイクルする時間（30分）
+            pool_pre_ping=True,             # 接続使用前にpingテストを実行
+            # 接続タイムアウト設定
+            connect_args={
+                "connect_timeout": 30,      # 接続タイムアウト
+                "keepalives_idle": 120,     # keepalive開始までの時間
+                "keepalives_interval": 30,  # keepaliveの間隔
+                "keepalives_count": 3,      # keepaliveの試行回数
+            }
+        )
         # 接続テスト
         with engine.connect():
             safe_log_info("データベース接続テスト成功")
@@ -67,12 +84,31 @@ def create_oauth_settings():
         logger.exception(f"データベース接続エラー: {e}")
         raise
 
-    installation_store = SQLAlchemyInstallationStore(
+    # リトライ機能付きのInstallationStoreを作成
+    class RetryingSQLAlchemyInstallationStore(SQLAlchemyInstallationStore):
+        def find_installation(self, **kwargs):
+            return retry_db_operation(lambda: super().find_installation(**kwargs))
+
+        def save(self, installation):
+            return retry_db_operation(lambda: super().save(installation))
+
+        def delete_installation(self, **kwargs):
+            return retry_db_operation(lambda: super().delete_installation(**kwargs))
+
+    # リトライ機能付きのStateStoreを作成
+    class RetryingSQLAlchemyOAuthStateStore(SQLAlchemyOAuthStateStore):
+        def issue(self, state):
+            return retry_db_operation(lambda: super().issue(state))
+
+        def consume(self, state):
+            return retry_db_operation(lambda: super().consume(state))
+
+    installation_store = RetryingSQLAlchemyInstallationStore(
         client_id=os.environ["SLACK_CLIENT_ID"],
         engine=engine,
         logger=logger,
     )
-    state_store = SQLAlchemyOAuthStateStore(
+    state_store = RetryingSQLAlchemyOAuthStateStore(
         engine=engine,
         expiration_seconds=600,
         logger=logger,
@@ -95,6 +131,29 @@ def create_oauth_settings():
     )
 
 
+# ----------------- データベース接続リトライ機能 -----------------
+def retry_db_operation(operation, max_retries=3, delay=1):
+    """
+    データベース操作をリトライする
+    """
+    for attempt in range(max_retries):
+        try:
+            return operation()
+        except (OperationalError, DisconnectionError) as e:
+            if attempt == max_retries - 1:
+                logger.error(f"データベース操作が最大リトライ回数({max_retries})後も失敗: {e}")
+                raise
+
+            logger.warning(f"データベース接続エラー(試行 {attempt + 1}/{max_retries}): {e}")
+            logger.info(f"{delay}秒後にリトライします...")
+            time.sleep(delay)
+            delay *= 2  # 指数バックオフ
+        except Exception as e:
+            # その他のエラーはリトライしない
+            logger.error(f"データベース操作で非回復可能なエラー: {e}")
+            raise
+
+
 oauth_settings = create_oauth_settings()
 
 app = App(
@@ -104,6 +163,20 @@ app = App(
 
 # Slack Bolt 全体のログレベルを調整してイベント処理を監視
 logging.getLogger("slack_bolt").setLevel(logging.INFO)
+
+# Slack Bolt アプリケーションのグローバルエラーハンドラー
+@app.error
+def global_error_handler(error, body, logger):
+    """Slack Boltアプリの全体的なエラーハンドラー"""
+    logger.exception(f"Slack Bolt エラー: {error}")
+
+    # データベース関連のエラーの場合
+    if isinstance(error, (OperationalError, DisconnectionError)):
+        logger.error("データベース接続エラーが発生しました。接続を再試行してください。")
+        # 必要に応じてここで追加の処理（通知など）を行う
+
+    # エラーをre-raiseして、デフォルトのエラーハンドリングも動作させる
+    raise error
 
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app)
@@ -307,7 +380,90 @@ def oauth_redirect():
 
 @flask_app.route("/health", methods=["GET"])
 def health_check():
-    return {"status": "ok", "message": "Application is running"}
+    """アプリケーションとデータベースの健康状態をチェック"""
+    status = {"status": "ok", "message": "Application is running"}
+
+    # データベース接続のチェック
+    try:
+        # create_oauth_settings()で作成されたengineを使用してテスト
+        database_url = os.environ.get("DATABASE_URL")
+        if database_url:
+            engine = create_engine(
+                database_url,
+                pool_size=1,
+                max_overflow=0,
+                pool_timeout=10,
+                pool_pre_ping=True,
+                connect_args={"connect_timeout": 10}
+            )
+            with engine.connect() as conn:
+                # 簡単なクエリを実行
+                result = conn.execute("SELECT 1")
+                result.fetchone()
+
+            status["database"] = "connected"
+            logger.info("健康チェック: データベース接続正常")
+        else:
+            status["database"] = "no_url_configured"
+            logger.warning("健康チェック: DATABASE_URLが設定されていません")
+    except Exception as e:
+        status["database"] = f"error: {str(e)}"
+        status["status"] = "degraded"
+        logger.error(f"健康チェック: データベース接続エラー: {e}")
+
+    return status
+
+
+@flask_app.route("/db-status", methods=["GET"])
+def db_status():
+    """データベース接続プールの詳細な状態を確認"""
+    try:
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            return {"error": "DATABASE_URL not configured"}, 500
+
+        # 一時的なエンジンを作成して接続プールの状態を確認
+        engine = create_engine(
+            database_url,
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=1800,
+            pool_pre_ping=True,
+            connect_args={
+                "connect_timeout": 30,
+                "keepalives_idle": 120,
+                "keepalives_interval": 30,
+                "keepalives_count": 3,
+            }
+        )
+
+        pool = engine.pool
+        status = {
+            "pool_size": pool.size(),
+            "checked_in": pool.checkedin(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "invalid": pool.invalid(),
+        }
+
+        # 接続テスト
+        try:
+            with engine.connect() as conn:
+                result = conn.execute("SELECT version()")
+                db_version = result.fetchone()[0]
+                status["database_version"] = db_version
+                status["connection_test"] = "success"
+        except Exception as e:
+            status["connection_test"] = f"failed: {str(e)}"
+
+        engine.dispose()  # リソースクリーンアップ
+        return status
+
+    except Exception as e:
+        logger.exception(f"データベース状態チェックエラー: {e}")
+        return {"error": str(e)}, 500
+
 
 # ----------------- 表示用データ（Gemini結果が入る） -----------------
 scanData = {
@@ -372,6 +528,7 @@ def handle_save_text(ack, body, say):
 def handle_edit_text(ack, body, say):
     try:
         safe_log_info("🔥🔥🔥 EDIT_TEXT アクションが呼び出されました！ 🔥🔥🔥")
+        say('editOK')
 
         ack()
 
@@ -434,6 +591,7 @@ def handle_edit_text(ack, body, say):
 def handle_save_changes(ack, body, say):
     try:
         safe_log_info("🔥🔥🔥 SAVE_CHANGES アクションが呼び出されました！ 🔥🔥🔥")
+        say('buttonOK')
 
         ack()
         changes = []
