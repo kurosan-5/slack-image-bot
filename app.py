@@ -4,6 +4,37 @@ from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from slack_sdk.oauth.installation_store.file import FileInstallationStore
 from slack_sdk.oauth.state_store.file import FileOAuthStateStore
+
+@flask_app.route("/")
+def root():
+    safe_log_info("ルートパス（/）にアクセスされました")
+    return '''
+    <html>
+        <head>
+            <title>Slack Image Bot</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
+                .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                h1 { color: #4A154B; margin-bottom: 20px; }
+                p { line-height: 1.6; color: #333; }
+                .status { padding: 10px; background-color: #28a745; color: white; border-radius: 4px; margin: 20px 0; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🤖 Slack Image Bot</h1>
+                <div class="status">✅ サーバーは正常に動作中です</div>
+                <p>このボットは画像をアップロードしてテキスト解析を行うSlackアプリです。</p>
+                <p><strong>機能:</strong></p>
+                <ul>
+                    <li>画像からのテキスト抽出</li>
+                    <li>Gmail作成支援</li>
+                    <li>データ管理</li>
+                </ul>
+            </div>
+        </body>
+    </html>
+    '''
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.oauth.state_store.sqlalchemy import SQLAlchemyOAuthStateStore
 from sqlalchemy import create_engine
@@ -20,18 +51,31 @@ import gspread
 from gemini import extract_from_bytes
 
 # ----------------- 基本設定 -----------------
+# Render等の本番環境では標準出力への明示的な出力が重要
 # 本番環境ではINFO、開発環境ではDEBUGレベルを使用
 log_level = logging.DEBUG if os.environ.get('ENVIRONMENT') == 'development' else logging.INFO
 
+# 標準出力への強制出力設定（Render対応）
+import sys
 logging.basicConfig(
     level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('app.log') if os.environ.get('ENVIRONMENT') == 'development' else logging.NullHandler()
-    ]
+    stream=sys.stdout,  # 標準出力を明示的に指定
+    force=True  # 既存のloggingハンドラーを強制的にリセット
 )
 logger = logging.getLogger(__name__)
+
+# 追加のprint関数でのログ出力（確実にRenderログに表示される）
+def log_print(message, level="INFO"):
+    """Renderサーバー用の確実なログ出力"""
+    timestamp = __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] [{level}] {message}", flush=True)
+
+# logger.infoの代替として使用
+def safe_log_info(message):
+    """logger.infoとprintの両方でログ出力"""
+    logger.info(message)
+    log_print(message, "INFO")
 
 # Slack Boltの特定の警告を抑制
 slack_bolt_logger = logging.getLogger("slack_bolt.App")
@@ -39,41 +83,17 @@ slack_bolt_logger.setLevel(logging.ERROR)
 
 load_dotenv()
 
-# 必要な環境変数をチェック
-def check_environment_variables():
-    required_vars = [
-        "SLACK_CLIENT_ID",
-        "SLACK_CLIENT_SECRET",
-        "SLACK_SIGNING_SECRET",
-        "DATABASE_URL",
-        "GEMINI_API_KEY"
-    ]
-
-    missing_vars = []
-    for var in required_vars:
-        if not os.environ.get(var):
-            missing_vars.append(var)
-
-    if missing_vars:
-        logger.error(f"必要な環境変数が設定されていません: {missing_vars}")
-        raise ValueError(f"Missing required environment variables: {missing_vars}")
-
-    logger.info("環境変数チェック完了")
-
-# 環境変数チェックを実行
-check_environment_variables()
 
 # ----------------- OAuth 設定 -----------------
 def create_oauth_settings():
     database_url = os.environ.get("DATABASE_URL")
-    logger.info(f"データベースURL: {database_url[:50]}..." if database_url else "データベースURL未設定")
 
     # SQLAlchemy Engine を作成
     try:
         engine = create_engine(database_url)
         # 接続テスト
-        with engine.connect() as conn:
-            logger.info("データベース接続テスト成功")
+        with engine.connect():
+            safe_log_info("データベース接続テスト成功")
     except Exception as e:
         logger.exception(f"データベース接続エラー: {e}")
         raise
@@ -116,66 +136,8 @@ app = App(
 # Slack Bolt 全体のログレベルを調整してイベント処理を監視
 logging.getLogger("slack_bolt").setLevel(logging.INFO)
 
-# アクションとイベントの受信を監視するミドルウェア
-@app.middleware
-def log_slack_events(body, next):
-    event_type = None
-    if "event" in body:
-        event_type = f"event:{body['event'].get('type', 'unknown')}"
-    elif "actions" in body:
-        actions = body.get("actions", [])
-        action_ids = [action.get("action_id") for action in actions]
-        event_type = f"action:{','.join(action_ids)}"
-    elif "type" in body:
-        event_type = f"type:{body['type']}"
-
-    logger.info(f"Slack イベント受信: {event_type}")
-    logger.debug(f"Slack Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
-
-    # 次のミドルウェア/ハンドラーに処理を委譲
-    try:
-        next()
-        logger.info(f"Slack イベント処理完了: {event_type}")
-    except Exception as e:
-        logger.exception(f"Slack イベント処理エラー: {event_type} - {e}")
-        raise
-
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app)
-
-# リクエスト/レスポンスのロギング
-@flask_app.before_request
-def log_request_info():
-    # よくある404リクエストを特定
-    common_404_paths = [
-        '/robots.txt', '/sitemap.xml', '/wp-admin/', '/admin/',
-        '/wp-login.php', '/.env', '/config', '/api/v1/', '/graphql'
-    ]
-
-    is_common_404 = any(request.path.startswith(path) for path in common_404_paths)
-
-    if is_common_404:
-        logger.info(f"Common 404 path accessed: {request.method} {request.path} from {request.remote_addr}")
-    else:
-        logger.info(f"Request: {request.method} {request.path}")
-        # Slack events エンドポイントの詳細ログ
-        if request.path == "/slack/events":
-            logger.info(f"Slack signature: {request.headers.get('X-Slack-Signature', 'N/A')}")
-            logger.info(f"Slack timestamp: {request.headers.get('X-Slack-Request-Timestamp', 'N/A')}")
-            logger.info(f"Content-Type: {request.headers.get('Content-Type', 'N/A')}")
-        logger.debug(f"Full URL: {request.url}")
-        logger.debug(f"Remote addr: {request.remote_addr}")
-        logger.debug(f"User-Agent: {request.headers.get('User-Agent', 'N/A')}")
-        logger.debug(f"Headers: {dict(request.headers)}")
-        if request.method == "POST":
-            logger.debug(f"Data: {request.get_data()[:500]}...")  # 最初の500文字のみ
-
-@flask_app.after_request
-def log_response_info(response):
-    # 404以外、または重要なパスの404のみログ出力
-    if response.status_code != 404 or request.path.startswith('/slack/'):
-        logger.info(f"Response: {response.status_code} for {request.method} {request.path}")
-    return response
 
 # Flask エラーハンドラー
 @flask_app.errorhandler(404)
@@ -305,12 +267,12 @@ def root():
 
 @flask_app.route("/robots.txt", methods=["GET"])
 def robots_txt():
-    logger.info("robots.txt にアクセスされました")
+    safe_log_info("robots.txt にアクセスされました")
     return "User-agent: *\nDisallow: /\n", 200, {'Content-Type': 'text/plain'}
 
 @flask_app.route("/favicon.ico", methods=["GET"])
 def favicon():
-    logger.info("favicon.ico にアクセスされました")
+    safe_log_info("favicon.ico にアクセスされました")
     return "", 204  # No Content
 
 # 一般的なボット攻撃パスを処理
@@ -332,13 +294,7 @@ def catch_all(path):
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
     try:
-        logger.info("Slack events エンドポイントが呼び出されました")
-        logger.debug(f"Request headers: {dict(request.headers)}")
-        logger.debug(f"Request data: {request.get_data()}")
-
-        # Slack の署名検証でエラーが発生していないかチェック
         result = handler.handle(request)
-        logger.info("Slack events 処理完了")
         return result
     except Exception as e:
         logger.exception(f"Slack events エンドポイントでエラー: {e}")
@@ -348,9 +304,7 @@ def slack_events():
 @flask_app.route("/slack/install", methods=["GET"])
 def install():
     try:
-        logger.info("Slack install エンドポイントが呼び出されました")
         result = handler.handle(request)
-        logger.info("Slack install 処理完了")
         return result
     except Exception as e:
         logger.exception(f"Slack install エンドポイントでエラー: {e}")
@@ -359,9 +313,7 @@ def install():
 @flask_app.route("/slack/oauth_redirect", methods=["GET"])
 def oauth_redirect():
     try:
-        logger.info("Slack oauth_redirect エンドポイントが呼び出されました")
         result = handler.handle(request)
-        logger.info("Slack oauth_redirect 処理完了")
         return result
     except Exception as e:
         logger.exception(f"Slack oauth_redirect エンドポイントでエラー: {e}")
@@ -384,58 +336,17 @@ scanData = {
 }
 
 # ----------------- ハンドラ -----------------
-@app.event("app_mention")
-def handle_mention(event, say):
-    say("読み取り完了。\n")
-    say(f"名前: {scanData['name_jp']}")
-    say(f"会社名: {scanData['company']}")
-    say(f"会社住所: {scanData['address']}")
-    say(f"Email: {scanData['email']}")
-    say(f"ウェブサイト: {scanData['website']}")
-    say(f"電話番号: {scanData['phone']}")
-
-    blocks = [
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "保存する"},
-                    "style": "primary",
-                    "action_id": "save_text"
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "変更する"},
-                    "action_id": "edit_text"
-                },
-            ],
-        }
-    ]
-    logger.info("ボタンブロック送信中...")
-    logger.debug(f"Blocks: {json.dumps(blocks, indent=2, ensure_ascii=False)}")
-    say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
-
 @app.action("save_text")
 def handle_save_text(ack, body, say):
     try:
-        logger.info("🔥🔥🔥 SAVE_TEXT アクションが呼び出されました！ 🔥🔥🔥")
-        logger.info(f"Action ID: {body.get('actions', [{}])[0].get('action_id', 'unknown')}")
-        logger.info(f"User ID: {body.get('user', {}).get('id', 'unknown')}")
-        logger.info(f"Channel ID: {body.get('channel', {}).get('id', 'unknown')}")
-        logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
-
+        safe_log_info("🔥🔥🔥 SAVE_TEXT アクションが呼び出されました！ 🔥🔥🔥")
         ack()
-        logger.info("ACK完了")
-
         # データの検証
         if not scanData.get('email'):
-            logger.warning("メールアドレスが設定されていません")
-            say("⚠️ メールアドレスが設定されていないため、Gmail作成リンクを生成できません。")
+            say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
             return
 
         say("保存しました。")
-        logger.info("保存完了メッセージ送信完了")
 
         body_template = (
             f"こんにちは、{scanData['name_jp']}さん。\n"
@@ -446,15 +357,13 @@ def handle_save_text(ack, body, say):
             f"電話番号: {scanData['phone']}"
         )
 
-        logger.info(f"Gmail作成用のメールアドレス: {scanData['email']}")
+        safe_log_info(f"Gmail作成用のメールアドレス: {scanData['email']}")
 
         url = gmail_compose_url(
             to=scanData["email"],
             subject=f"{scanData['name_jp']}さんの名刺情報",
             body=body_template,
         )
-
-        logger.info(f"生成されたGmail URL: {url}")
 
         say(
             blocks=[
@@ -466,8 +375,6 @@ def handle_save_text(ack, body, say):
             text=f"Gmail作成リンク: {url}",
         )
 
-        logger.info("Gmail作成リンク送信完了")
-
     except Exception as e:
         logger.exception(f"save_text ハンドラーでエラーが発生: {e}")
         try:
@@ -478,17 +385,11 @@ def handle_save_text(ack, body, say):
 @app.action("edit_text")
 def handle_edit_text(ack, body, say):
     try:
-        logger.info("🔥🔥🔥 EDIT_TEXT アクションが呼び出されました！ 🔥🔥🔥")
-        logger.info(f"Action ID: {body.get('actions', [{}])[0].get('action_id', 'unknown')}")
-        logger.info(f"User ID: {body.get('user', {}).get('id', 'unknown')}")
-        logger.info(f"Channel ID: {body.get('channel', {}).get('id', 'unknown')}")
-        logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
+        safe_log_info("🔥🔥🔥 EDIT_TEXT アクションが呼び出されました！ 🔥🔥🔥")
 
         ack()
-        logger.info("ACK完了")
 
         say("該当項目を変更してください。")
-        logger.info("変更画面表示メッセージ送信完了")
 
         editBlocks = [
             {
@@ -534,9 +435,7 @@ def handle_edit_text(ack, body, say):
             },
         ]
 
-        logger.info("編集フォームを送信中...")
         say(blocks=editBlocks, text="変更したい項目を選んでください")
-        logger.info("編集フォーム送信完了")
 
     except Exception as e:
         logger.exception(f"edit_text ハンドラーでエラーが発生: {e}")
@@ -548,15 +447,9 @@ def handle_edit_text(ack, body, say):
 @app.action("save_changes")
 def handle_save_changes(ack, body, say):
     try:
-        logger.info("🔥🔥🔥 SAVE_CHANGES アクションが呼び出されました！ 🔥🔥🔥")
-        logger.info(f"Action ID: {body.get('actions', [{}])[0].get('action_id', 'unknown')}")
-        logger.info(f"User ID: {body.get('user', {}).get('id', 'unknown')}")
-        logger.info(f"Channel ID: {body.get('channel', {}).get('id', 'unknown')}")
-        logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
+        safe_log_info("🔥🔥🔥 SAVE_CHANGES アクションが呼び出されました！ 🔥🔥🔥")
 
         ack()
-        logger.info("ACK完了")
-
         changes = []
         state_values = body.get("state", {}).get("values", {})
 
@@ -564,8 +457,6 @@ def handle_save_changes(ack, body, say):
             logger.warning("state.values が空です")
             say("❌ フォームデータが取得できませんでした。もう一度お試しください。")
             return
-
-        logger.info(f"State values: {json.dumps(state_values, indent=2, ensure_ascii=False)}")
 
         for block in state_values:
             block_data = state_values[block]
@@ -591,15 +482,9 @@ def handle_save_changes(ack, body, say):
 
                 if display_key:
                     changes.append(f"{display_key}: {new_value}")
-                    logger.info(f"{display_key} を {new_value} に更新")
-
-        if not changes:
-            logger.warning("変更内容がありません")
-            say("❌ 変更内容が検出されませんでした。")
-            return
+                    safe_log_info(f"{display_key} を {new_value} に更新")
 
         say("変更内容を保存しました:\n" + "\n".join(changes))
-        logger.info("変更保存完了メッセージ送信完了")
 
         body_template = (
             f"こんにちは、{scanData['name_jp']}さん。\n"
@@ -611,8 +496,7 @@ def handle_save_changes(ack, body, say):
         )
 
         if not scanData.get('email'):
-            logger.warning("メールアドレスが設定されていません")
-            say("⚠️ メールアドレスが設定されていないため、Gmail作成リンクを生成できません。")
+            say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
             return
 
         url = gmail_compose_url(
@@ -621,7 +505,7 @@ def handle_save_changes(ack, body, say):
             body=body_template,
         )
 
-        logger.info(f"生成されたGmail URL: {url}")
+        safe_log_info(f"生成されたGmail URL: {url}")
 
         say(
             blocks=[
@@ -633,7 +517,7 @@ def handle_save_changes(ack, body, say):
             text=f"Gmail作成リンク: {url}",
         )
 
-        logger.info("Gmail作成リンク送信完了")
+        safe_log_info("Gmail作成リンク送信完了")
 
     except Exception as e:
         logger.exception(f"save_changes ハンドラーでエラーが発生: {e}")
@@ -647,41 +531,10 @@ def handle_message_events(body, say, context):
     say('読み込んでいます...')
     event = body.get("event", {})
 
-    # DM の通常メッセージ（ファイルなし）に既存情報を表示（任意）
-    if event.get("channel_type") == "im" and "files" not in event:
-        say("読み取り完了。\n")
-        say(f"名前: {scanData['name_jp']}")
-        say(f"会社名: {scanData['company']}")
-        say(f"会社住所: {scanData['address']}")
-        say(f"Email: {scanData['email']}")
-        say(f"ウェブサイト: {scanData['website']}")
-        say(f"電話番号: {scanData['phone']}")
-        blocks = [
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "保存する"},
-                        "style": "primary",
-                        "action_id": "save_text"
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "変更する"},
-                        "action_id": "edit_text"
-                    },
-                ],
-            }
-        ]
-        logger.info("DMメッセージ用ボタンブロック送信中...")
-        say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
-
     # 添付ファイル（画像）を処理
     if "files" in event:
         bot_token = context.get("bot_token") or os.environ.get("SLACK_BOT_TOKEN")
         if not bot_token:
-            logger.error("Bot token が見つかりません（OAuth未完了 or 環境変数未設定）")
             say("内部設定エラー（Bot token 未設定）。インストール設定を確認してください。")
             return
 
@@ -759,10 +612,10 @@ if __name__ == "__main__":
         logger.info("=== アプリケーション起動開始 ===")
         logger.info(f"Python version: {os.sys.version}")
         logger.info(f"Current working directory: {os.getcwd()}")
-        logger.info(f"Environment: {os.environ.get('ENVIRONMENT', 'production')}")
+        safe_log_info(f"Environment: {os.environ.get('ENVIRONMENT', 'production')}")
 
         port = int(os.environ.get("PORT", 3000))
-        logger.info(f"Starting Flask app on port {port}")
+        safe_log_info(f"Starting Flask app on port {port}")
 
         # 本番環境の場合はデバッグモードを無効にする
         debug_mode = os.environ.get('ENVIRONMENT') == 'development'
