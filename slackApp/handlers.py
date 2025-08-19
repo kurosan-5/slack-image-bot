@@ -20,10 +20,10 @@ scanData = {
 def handle_save_text(ack, body, say):
     try:
         ack()
+        say("保存しました。")
         if not scanData.get('email'):
             say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
             return
-        say("保存しました。")
         body_template = (
             f"こんにちは、{scanData['name_jp']}さん。\n"
             f"会社名: {scanData['company']}\n"
@@ -143,6 +143,9 @@ def handle_save_changes(ack, body, say):
                     changes.append(f"{display_key}: {new_value}")
                     logging.info(f"{display_key} を {new_value} に更新")
         say("変更内容を保存しました:\n" + "\n".join(changes))
+        if not scanData.get('email'):
+            say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
+            return
         body_template = (
             f"こんにちは、{scanData['name_jp']}さん。\n"
             f"会社名: {scanData['company']}\n"
@@ -151,9 +154,6 @@ def handle_save_changes(ack, body, say):
             f"ウェブサイト: {scanData['website']}\n"
             f"電話番号: {scanData['phone']}"
         )
-        if not scanData.get('email'):
-            say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
-            return
         url = gmail_compose_url(
             to=scanData["email"],
             subject=f"{scanData['name_jp']}さんの名刺情報",
