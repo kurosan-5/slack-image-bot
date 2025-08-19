@@ -351,8 +351,6 @@ scanData = {
 @app.action("save_text")
 def handle_save_text(ack, body, say):
     try:
-        safe_log_info("🔥🔥🔥 SAVE_TEXT アクションが呼び出されました！ 🔥🔥🔥")
-        say('save_OK')
         ack()
         # データの検証
         if not scanData.get('email'):
@@ -398,8 +396,6 @@ def handle_save_text(ack, body, say):
 @app.action("edit_text")
 def handle_edit_text(ack, body, say):
     try:
-        safe_log_info("🔥🔥🔥 EDIT_TEXT アクションが呼び出されました！ 🔥🔥🔥")
-        say('editOK')
         ack()
 
         say("該当項目を変更してください。")
@@ -460,8 +456,6 @@ def handle_edit_text(ack, body, say):
 @app.action("save_changes")
 def handle_save_changes(ack, body, say):
     try:
-        safe_log_info("🔥🔥🔥 SAVE_CHANGES アクションが呼び出されました！ 🔥🔥🔥")
-
         ack()
         changes = []
         state_values = body.get("state", {}).get("values", {})
@@ -539,12 +533,6 @@ def handle_save_changes(ack, body, say):
         except Exception as say_error:
             logger.exception(f"エラーメッセージの送信にも失敗: {say_error}")
 
-@app.action('demo')
-def handle_demo(ack, body, say):
-    ack()
-    safe_log_info("🔥🔥🔥 DEMO アクションが呼び出されました！ 🔥🔥🔥")
-    say("デモ用のアクションが実行されました。")
-
 @app.event("message")
 def handle_message_events(body, say, context):
     say('読み込んでいます...')
@@ -610,11 +598,6 @@ def handle_message_events(body, say, context):
                                 "type": "button",
                                 "text": {"type": "plain_text", "text": "変更する"},
                                 "action_id": "edit_text"
-                            },
-                            {
-                                "type": "button",
-                                "text": {"type": "plain_text", "text": "demo"},
-                                "action_id": "demo"
                             },
                         ],
                     }
