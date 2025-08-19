@@ -113,6 +113,33 @@ app = App(
     oauth_settings=oauth_settings,
 )
 
+# Slack Bolt 全体のログレベルを調整してイベント処理を監視
+logging.getLogger("slack_bolt").setLevel(logging.INFO)
+
+# アクションとイベントの受信を監視するミドルウェア
+@app.middleware
+def log_slack_events(body, next):
+    event_type = None
+    if "event" in body:
+        event_type = f"event:{body['event'].get('type', 'unknown')}"
+    elif "actions" in body:
+        actions = body.get("actions", [])
+        action_ids = [action.get("action_id") for action in actions]
+        event_type = f"action:{','.join(action_ids)}"
+    elif "type" in body:
+        event_type = f"type:{body['type']}"
+
+    logger.info(f"Slack イベント受信: {event_type}")
+    logger.debug(f"Slack Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
+
+    # 次のミドルウェア/ハンドラーに処理を委譲
+    try:
+        next()
+        logger.info(f"Slack イベント処理完了: {event_type}")
+    except Exception as e:
+        logger.exception(f"Slack イベント処理エラー: {event_type} - {e}")
+        raise
+
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app)
 
@@ -131,6 +158,11 @@ def log_request_info():
         logger.info(f"Common 404 path accessed: {request.method} {request.path} from {request.remote_addr}")
     else:
         logger.info(f"Request: {request.method} {request.path}")
+        # Slack events エンドポイントの詳細ログ
+        if request.path == "/slack/events":
+            logger.info(f"Slack signature: {request.headers.get('X-Slack-Signature', 'N/A')}")
+            logger.info(f"Slack timestamp: {request.headers.get('X-Slack-Request-Timestamp', 'N/A')}")
+            logger.info(f"Content-Type: {request.headers.get('Content-Type', 'N/A')}")
         logger.debug(f"Full URL: {request.url}")
         logger.debug(f"Remote addr: {request.remote_addr}")
         logger.debug(f"User-Agent: {request.headers.get('User-Agent', 'N/A')}")
@@ -303,12 +335,15 @@ def slack_events():
         logger.info("Slack events エンドポイントが呼び出されました")
         logger.debug(f"Request headers: {dict(request.headers)}")
         logger.debug(f"Request data: {request.get_data()}")
+
+        # Slack の署名検証でエラーが発生していないかチェック
         result = handler.handle(request)
         logger.info("Slack events 処理完了")
         return result
     except Exception as e:
         logger.exception(f"Slack events エンドポイントでエラー: {e}")
-        raise
+        # エラーでも適切なレスポンスを返す
+        return {"error": "Internal Server Error"}, 500
 
 @flask_app.route("/slack/install", methods=["GET"])
 def install():
@@ -363,17 +398,31 @@ def handle_mention(event, say):
         {
             "type": "actions",
             "elements": [
-                {"type": "button", "text": {"type": "plain_text", "text": "保存する"}, "style": "primary", "value": "save_text", "action_id": "save_text"},
-                {"type": "button", "text": {"type": "plain_text", "text": "変更する"}, "value": "edit_text", "action_id": "edit_text"},
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "保存する"},
+                    "style": "primary",
+                    "action_id": "save_text"
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "変更する"},
+                    "action_id": "edit_text"
+                },
             ],
         }
     ]
+    logger.info("ボタンブロック送信中...")
+    logger.debug(f"Blocks: {json.dumps(blocks, indent=2, ensure_ascii=False)}")
     say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
 
 @app.action("save_text")
 def handle_save_text(ack, body, say):
     try:
-        logger.info("保存ボタンが押されました")
+        logger.info("🔥🔥🔥 SAVE_TEXT アクションが呼び出されました！ 🔥🔥🔥")
+        logger.info(f"Action ID: {body.get('actions', [{}])[0].get('action_id', 'unknown')}")
+        logger.info(f"User ID: {body.get('user', {}).get('id', 'unknown')}")
+        logger.info(f"Channel ID: {body.get('channel', {}).get('id', 'unknown')}")
         logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
 
         ack()
@@ -429,7 +478,10 @@ def handle_save_text(ack, body, say):
 @app.action("edit_text")
 def handle_edit_text(ack, body, say):
     try:
-        logger.info("変更ボタンが押されました")
+        logger.info("🔥🔥🔥 EDIT_TEXT アクションが呼び出されました！ 🔥🔥🔥")
+        logger.info(f"Action ID: {body.get('actions', [{}])[0].get('action_id', 'unknown')}")
+        logger.info(f"User ID: {body.get('user', {}).get('id', 'unknown')}")
+        logger.info(f"Channel ID: {body.get('channel', {}).get('id', 'unknown')}")
         logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
 
         ack()
@@ -472,7 +524,12 @@ def handle_edit_text(ack, body, say):
             {
                 "type": "actions",
                 "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "変更を保存"}, "style": "primary", "value": "save_changes", "action_id": "save_changes"}
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "変更を保存"},
+                        "style": "primary",
+                        "action_id": "save_changes"
+                    }
                 ],
             },
         ]
@@ -491,7 +548,10 @@ def handle_edit_text(ack, body, say):
 @app.action("save_changes")
 def handle_save_changes(ack, body, say):
     try:
-        logger.info("変更保存ボタンが押されました")
+        logger.info("🔥🔥🔥 SAVE_CHANGES アクションが呼び出されました！ 🔥🔥🔥")
+        logger.info(f"Action ID: {body.get('actions', [{}])[0].get('action_id', 'unknown')}")
+        logger.info(f"User ID: {body.get('user', {}).get('id', 'unknown')}")
+        logger.info(f"Channel ID: {body.get('channel', {}).get('id', 'unknown')}")
         logger.debug(f"Body: {json.dumps(body, indent=2, ensure_ascii=False)}")
 
         ack()
@@ -581,25 +641,6 @@ def handle_save_changes(ack, body, say):
             say(f"❌ エラーが発生しました: {str(e)}")
         except Exception as say_error:
             logger.exception(f"エラーメッセージの送信にも失敗: {say_error}")
-        f"会社住所: {scanData['address']}\n"
-        f"Email: {scanData['email']}\n"
-        f"ウェブサイト: {scanData['website']}\n"
-        f"電話番号: {scanData['phone']}"
-    url = gmail_compose_url(
-        to=scanData["email"],
-        subject=f"{scanData['name_jp']}さんの名刺情報",
-        body=body_template,
-    )
-
-    say(
-        blocks=[
-            {"type": "section", "text": {"type": "mrkdwn", "text": "保存した内容をもとにGmailを送信:"}},
-            {"type": "actions", "elements": [
-                {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "Gmailで新規作成"}, "url": url}
-            ]},
-        ],
-        text=f"Gmail作成リンク: {url}",
-    )
 
 @app.event("message")
 def handle_message_events(body, say, context):
@@ -619,11 +660,21 @@ def handle_message_events(body, say, context):
             {
                 "type": "actions",
                 "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "保存する"}, "style": "primary", "value": "save_text", "action_id": "save_text"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "変更する"}, "value": "edit_text", "action_id": "edit_text"},
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "保存する"},
+                        "style": "primary",
+                        "action_id": "save_text"
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "変更する"},
+                        "action_id": "edit_text"
+                    },
                 ],
             }
         ]
+        logger.info("DMメッセージ用ボタンブロック送信中...")
         say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
 
     # 添付ファイル（画像）を処理
@@ -677,11 +728,21 @@ def handle_message_events(body, say, context):
                     {
                         "type": "actions",
                         "elements": [
-                            {"type": "button", "text": {"type": "plain_text", "text": "保存する"}, "style": "primary", "value": "save_text", "action_id": "save_text"},
-                            {"type": "button", "text": {"type": "plain_text", "text": "変更する"}, "value": "edit_text", "action_id": "edit_text"},
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "保存する"},
+                                "style": "primary",
+                                "action_id": "save_text"
+                            },
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "変更する"},
+                                "action_id": "edit_text"
+                            },
                         ],
                     }
                 ]
+                logger.info("Gemini解析後ボタンブロック送信中...")
                 say(blocks=blocks, text="読み取り結果に対してアクションを選んでください")
 
             except Exception:
