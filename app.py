@@ -541,16 +541,9 @@ def handle_save_changes(ack, body, say):
 
 @app.action('demo')
 def handle_demo(ack, body, say):
-    try:
-        safe_log_info("🔥🔥🔥 DEMO アクションが呼び出されました！ 🔥🔥🔥")
-        ack()
-        say("デモ用のアクションが実行されました。")
-    except Exception as e:
-        logger.exception(f"demo ハンドラーでエラーが発生: {e}")
-        try:
-            say(f"❌ エラーが発生しました: {str(e)}")
-        except Exception as say_error:
-            logger.exception(f"エラーメッセージの送信にも失敗: {say_error}")
+    ack()
+    safe_log_info("🔥🔥🔥 DEMO アクションが呼び出されました！ 🔥🔥🔥")
+    say("デモ用のアクションが実行されました。")
 
 @app.event("message")
 def handle_message_events(body, say, context):
