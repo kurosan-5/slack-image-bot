@@ -4,37 +4,6 @@ from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from slack_sdk.oauth.installation_store.file import FileInstallationStore
 from slack_sdk.oauth.state_store.file import FileOAuthStateStore
-
-@flask_app.route("/")
-def root():
-    safe_log_info("ルートパス（/）にアクセスされました")
-    return '''
-    <html>
-        <head>
-            <title>Slack Image Bot</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
-                .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                h1 { color: #4A154B; margin-bottom: 20px; }
-                p { line-height: 1.6; color: #333; }
-                .status { padding: 10px; background-color: #28a745; color: white; border-radius: 4px; margin: 20px 0; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🤖 Slack Image Bot</h1>
-                <div class="status">✅ サーバーは正常に動作中です</div>
-                <p>このボットは画像をアップロードしてテキスト解析を行うSlackアプリです。</p>
-                <p><strong>機能:</strong></p>
-                <ul>
-                    <li>画像からのテキスト抽出</li>
-                    <li>Gmail作成支援</li>
-                    <li>データ管理</li>
-                </ul>
-            </div>
-        </body>
-    </html>
-    '''
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.oauth.state_store.sqlalchemy import SQLAlchemyOAuthStateStore
 from sqlalchemy import create_engine
@@ -251,19 +220,36 @@ def export_to_existing_sheet(data):
 # print(f"Google Sheets URL: {sheet_url}")
 
 # ----------------- ルーティング（OAuth / Events） -----------------
-@flask_app.route("/", methods=["GET"])
+@flask_app.route("/")
 def root():
-    logger.info("ルートパス（/）にアクセスされました")
-    return {
-        "status": "ok",
-        "message": "Slack Image Bot is running",
-        "endpoints": {
-            "/health": "Health check",
-            "/slack/events": "Slack events endpoint",
-            "/slack/install": "Slack app installation",
-            "/slack/oauth_redirect": "OAuth redirect"
-        }
-    }
+    safe_log_info("ルートパス（/）にアクセスされました")
+    return '''
+    <html>
+        <head>
+            <title>Slack Image Bot</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
+                .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                h1 { color: #4A154B; margin-bottom: 20px; }
+                p { line-height: 1.6; color: #333; }
+                .status { padding: 10px; background-color: #28a745; color: white; border-radius: 4px; margin: 20px 0; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🤖 Slack Image Bot</h1>
+                <div class="status">✅ サーバーは正常に動作中です</div>
+                <p>このボットは画像をアップロードしてテキスト解析を行うSlackアプリです。</p>
+                <p><strong>機能:</strong></p>
+                <ul>
+                    <li>画像からのテキスト抽出</li>
+                    <li>Gmail作成支援</li>
+                    <li>データ管理</li>
+                </ul>
+            </div>
+        </body>
+    </html>
+    '''
 
 @flask_app.route("/robots.txt", methods=["GET"])
 def robots_txt():
