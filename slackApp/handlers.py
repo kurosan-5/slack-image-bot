@@ -94,7 +94,7 @@ def handle_edit_text(ack, body, say):
             },
             {
                 "type": "input",
-                "block_id": "website",
+                "block_id": "edit_website",
                 "label": {"type": "plain_text", "text": "ウェブサイト"},
                 "element": {"type": "plain_text_input", "action_id": "website", "initial_value": f"{scanData['website']}"},
             },
