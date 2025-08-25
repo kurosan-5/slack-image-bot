@@ -5,8 +5,7 @@ import logging
 import os
 from google.sheets import append_record_to_sheet
 scanData = {
-    "name_jp": "",
-    "name_en": "",
+    "name": "",
     "company": "",
     "postal_code": "",
     "address": "",
@@ -67,13 +66,19 @@ def handle_edit_text(ack, body, say):
                 "type": "input",
                 "block_id": "edit_name",
                 "label": {"type": "plain_text", "text": "名前"},
-                "element": {"type": "plain_text_input", "action_id": "name", "initial_value": f"{scanData['name_jp']}"},
+                "element": {"type": "plain_text_input", "action_id": "name", "initial_value": f"{scanData['name']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_company",
                 "label": {"type": "plain_text", "text": "会社名"},
                 "element": {"type": "plain_text_input", "action_id": "company", "initial_value": f"{scanData['company']}"},
+            },
+                        {
+                "type": "input",
+                "block_id": "edit_postal_code",
+                "label": {"type": "plain_text", "text": "郵便番号"},
+                "element": {"type": "plain_text_input", "action_id": "postal_code", "initial_value": f"{scanData['postal_code']}"},
             },
             {
                 "type": "input",
@@ -86,6 +91,12 @@ def handle_edit_text(ack, body, say):
                 "block_id": "edit_email",
                 "label": {"type": "plain_text", "text": "Email"},
                 "element": {"type": "plain_text_input", "action_id": "email", "initial_value": f"{scanData['email']}"},
+            },
+            {
+                "type": "input",
+                "block_id": "website",
+                "label": {"type": "plain_text", "text": "ウェブサイト"},
+                "element": {"type": "plain_text_input", "action_id": "website", "initial_value": f"{scanData['website']}"},
             },
             {
                 "type": "input",
@@ -130,16 +141,22 @@ def handle_save_changes(ack, body, say):
                 new_value = value.get("value", "")
                 if key == "name":
                     display_key = "名前"
-                    scanData["name_jp"] = new_value
+                    scanData["name"] = new_value
                 elif key == "company":
                     display_key = "会社名"
                     scanData["company"] = new_value
+                elif key == "postal_code":
+                    diplay_key = "郵便番号"
+                    scanData["postal_code"] = new_value
                 elif key == "address":
                     display_key = "会社住所"
                     scanData["address"] = new_value
                 elif key == "email":
                     display_key = "Email"
                     scanData["email"] = new_value
+                elif key == "website":
+                    display_key = "ウェブサイト"
+                    scanData["website"] = new_value    
                 elif key == "phone":
                     display_key = "電話番号"
                     scanData["phone"] = new_value
@@ -210,8 +227,7 @@ def handle_message_events(body, say, context):
                 data = extract_from_bytes(image_bytes)
                 logging.info(f"Gemini解析結果: {data}")
                 scanData.update({
-                    "name_jp":     data.get("name_jp", "")     or scanData.get("name_jp", ""),
-                    "name_en":     data.get("name_en", "")     or scanData.get("name_en", ""),
+                    "name":     data.get("name", "")     or scanData.get("name", ""),
                     "company":     data.get("company", "")     or scanData.get("company", ""),
                     "postal_code": data.get("postal_code", "") or scanData.get("postal_code", ""),
                     "address":     data.get("address", "")     or scanData.get("address", ""),
@@ -220,8 +236,9 @@ def handle_message_events(body, say, context):
                     "phone":       data.get("phone", "")       or scanData.get("phone", ""),
                 })
                 say("読み取り完了。\n")
-                say(f"名前: {scanData['name_jp']}")
+                say(f"名前: {scanData['name']}")
                 say(f"会社名: {scanData['company']}")
+                say(f"郵便番号: {scanData['postal_code']}")
                 say(f"会社住所: {scanData['address']}")
                 say(f"Email: {scanData['email']}")
                 say(f"ウェブサイト: {scanData['website']}")

@@ -12,8 +12,7 @@ MODEL = "gemini-2.5-flash-lite"
 SCHEMA = {
   "type": "object",
   "properties": {
-    "name_jp": {"type": "string"},
-    "name_en": {"type": "string"},
+    "name": {"type": "string"},
     "company": {"type": "string"},
     "postal_code": {"type": "string"},
     "address": {"type": "string"},
