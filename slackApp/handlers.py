@@ -1,6 +1,5 @@
 from slackApp.app import app
-from helpers.gmail import gmail_compose_url
-from slackApp.utils import fetch_slack_private_file, is_probably_image
+from slackApp.utils import fetch_slack_private_file, is_probably_image, send_mail_link
 from AIParcer.parser import extract_from_bytes
 import logging
 import os
@@ -43,28 +42,8 @@ def handle_save_text(ack, body, say):
             say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
             return
 
-        body_template = (
-            f"こんにちは、{scanData['name_jp']}さん。\n"
-            f"会社名: {scanData['company']}\n"
-            f"会社住所: {scanData['address']}\n"
-            f"Email: {scanData['email']}\n"
-            f"ウェブサイト: {scanData['website']}\n"
-            f"電話番号: {scanData['phone']}"
-        )
-        url = gmail_compose_url(
-            to=scanData["email"],
-            subject=f"{scanData['name_jp']}さんの名刺情報",
-            body=body_template,
-        )
-        say(
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": "保存した内容をもとにGmailを送信:"}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "Gmailで新規作成"}, "url": url}
-                ]},
-            ],
-            text=f"Gmail作成リンク: {url}",
-        )
+        send_mail_link(scanData, say)
+
     except Exception as e:
         logging.exception(f"save_text ハンドラーでエラーが発生: {e}")
         try:
@@ -183,28 +162,8 @@ def handle_save_changes(ack, body, say):
             say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
             return
 
-        body_template = (
-            f"こんにちは、{scanData['name_jp']}さん。\n"
-            f"会社名: {scanData['company']}\n"
-            f"会社住所: {scanData['address']}\n"
-            f"Email: {scanData['email']}\n"
-            f"ウェブサイト: {scanData['website']}\n"
-            f"電話番号: {scanData['phone']}"
-        )
-        url = gmail_compose_url(
-            to=scanData["email"],
-            subject=f"{scanData['name_jp']}さんの名刺情報",
-            body=body_template,
-        )
-        say(
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": "保存した内容をもとにGmailを送信:"}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "Gmailで新規作成"}, "url": url}
-                ]},
-            ],
-            text=f"Gmail作成リンク: {url}",
-        )
+        send_mail_link(scanData, say)
+
     except Exception as e:
         logging.exception(f"save_changes ハンドラーでエラーが発生: {e}")
         try:

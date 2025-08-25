@@ -1,4 +1,5 @@
 import requests
+from helpers.gmail import gmail_compose_url_PC, gmail_compose_url_mobile
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".heif", ".tif", ".tiff")
 
 def fetch_slack_private_file(url_private: str, bot_token: str) -> bytes:
@@ -31,3 +32,35 @@ def is_probably_image(slack_file: dict, bot_token: str) -> bool:
     except Exception:
         pass
     return False
+
+def send_mail_link(scanData, say):
+    body_template = (
+            f"こんにちは、{scanData['name_jp']}さん。\n"
+            f"会社名: {scanData['company']}\n"
+            f"会社住所: {scanData['address']}\n"
+            f"Email: {scanData['email']}\n"
+            f"ウェブサイト: {scanData['website']}\n"
+            f"電話番号: {scanData['phone']}"
+    )
+    url_mobile = gmail_compose_url_mobile(
+        to=scanData["email"],
+        subject=f"{scanData['name_jp']}さんの名刺情報",
+        body=body_template,
+    )
+    url_PC = gmail_compose_url_PC(
+        to=scanData["email"],
+        subject=f"{scanData['name_jp']}さんの名刺情報",
+        body=body_template,
+    )
+    say(
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": "保存した内容をもとにGmailを送信:"}},
+            {"type": "actions", "elements": [
+                {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "メールを作成(モバイル)"}, "url": url_mobile}
+            ]},
+            {"type": "actions", "elements": [
+                {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "メールを作成(PC)"}, "url": url_PC}
+            ]},
+        ],
+        text=f"Gmail作成リンク: {url_mobile}",
+    )
