@@ -12,8 +12,7 @@ MODEL = "gemini-2.5-flash-lite"
 SCHEMA = {
   "type": "object",
   "properties": {
-    "name_jp": {"type": "string"},
-    "name_en": {"type": "string"},
+    "name": {"type": "string"},
     "company": {"type": "string"},
     "postal_code": {"type": "string"},
     "address": {"type": "string"},
@@ -25,7 +24,9 @@ SCHEMA = {
 
 SYSTEM_PROMPT = (
   "You are a precise business card parser for Japanese and English cards. "
-  "Return strict JSON per the schema. Missing fields should be empty strings."
+  "Return strict JSON per the schema. Missing fields should be empty strings. "
+  "The postal_code field must contain the postal code only. "
+  "Do not include the postal code in the address field."
 )
 
 def _bytes_to_pil(b: bytes) -> Image.Image:

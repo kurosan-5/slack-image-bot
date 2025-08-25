@@ -5,11 +5,8 @@ import logging
 import os
 from collections import deque
 from google.sheets import append_record_to_sheet
-
-# scanData のテンプレートと、チャンネル(DM)ごとの保存先
-SCAN_DATA_TEMPLATE = {
-    "name_jp": "",
-    "name_en": "",
+scanData = {
+    "name": "",
     "company": "",
     "postal_code": "",
     "address": "",
@@ -219,39 +216,43 @@ def handle_save_text(ack, body, say):
 def handle_edit_text(ack, body, say):
     try:
         ack()
-        channel_id = _get_channel_id_from_action_body(body)
-        ch_data = _get_scan_data(channel_id)
         say("該当項目を変更してください。")
         editBlocks = [
             {
                 "type": "input",
                 "block_id": "edit_name",
                 "label": {"type": "plain_text", "text": "名前"},
-        "element": {"type": "plain_text_input", "action_id": "name", "initial_value": f"{ch_data['name_jp']}"},
+                "element": {"type": "plain_text_input", "action_id": "name", "initial_value": f"{scanData['name']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_company",
                 "label": {"type": "plain_text", "text": "会社名"},
-        "element": {"type": "plain_text_input", "action_id": "company", "initial_value": f"{ch_data['company']}"},
+                "element": {"type": "plain_text_input", "action_id": "company", "initial_value": f"{scanData['company']}"},
+            },
+                        {
+                "type": "input",
+                "block_id": "edit_postal_code",
+                "label": {"type": "plain_text", "text": "郵便番号"},
+                "element": {"type": "plain_text_input", "action_id": "postal_code", "initial_value": f"{scanData['postal_code']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_address",
                 "label": {"type": "plain_text", "text": "会社住所"},
-        "element": {"type": "plain_text_input", "action_id": "address", "initial_value": f"{ch_data['address']}"},
+        "element": {"type": "plain_text_input", "action_id": "address", "initial_value": f"{scanData['address']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_email",
                 "label": {"type": "plain_text", "text": "Email"},
-        "element": {"type": "plain_text_input", "action_id": "email", "initial_value": f"{ch_data['email']}"},
+                "element": {"type": "plain_text_input", "action_id": "email", "initial_value": f"{scanData['email']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_phone",
                 "label": {"type": "plain_text", "text": "電話番号"},
-        "element": {"type": "plain_text_input", "action_id": "phone", "initial_value": f"{ch_data['phone']}"},
+        "element": {"type": "plain_text_input", "action_id": "phone", "initial_value": f"{scanData['phone']}"},
             },
             {
                 "type": "actions",
@@ -292,16 +293,22 @@ def handle_save_changes(ack, body, say):
                 new_value = value.get("value", "")
                 if key == "name":
                     display_key = "名前"
-                    ch_data["name_jp"] = new_value
+                    scanData["name"] = new_value
                 elif key == "company":
                     display_key = "会社名"
-                    ch_data["company"] = new_value
+                    scanData["company"] = new_value
+                elif key == "postal_code":
+                    diplay_key = "郵便番号"
+                    scanData["postal_code"] = new_value
                 elif key == "address":
                     display_key = "会社住所"
                     ch_data["address"] = new_value
                 elif key == "email":
                     display_key = "Email"
-                    ch_data["email"] = new_value
+                    scanData["email"] = new_value
+                elif key == "website":
+                    display_key = "ウェブサイト"
+                    scanData["website"] = new_value
                 elif key == "phone":
                     display_key = "電話番号"
                     ch_data["phone"] = new_value
