@@ -250,6 +250,12 @@ def handle_edit_text(ack, body, say):
             },
             {
                 "type": "input",
+                "block_id": "edit_website",
+                "label": {"type": "plain_text", "text": "ウェブサイト"},
+                "element": {"type": "plain_text_input", "action_id": "website", "initial_value": f"{scanData['website']}"},
+            },
+            {
+                "type": "input",
                 "block_id": "edit_phone",
                 "label": {"type": "plain_text", "text": "電話番号"},
         "element": {"type": "plain_text_input", "action_id": "phone", "initial_value": f"{scanData['phone']}"},
