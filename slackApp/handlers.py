@@ -374,10 +374,18 @@ def handle_save_changes(ack, body, say):
 
 @app.action("cancel_text")
 def handle_cancel_text(ack, body, say):
-    ack()
-    channel_id = _get_channel_id_from_action_body(body)
-    _clear_scan_data(channel_id)
-    say("変更がキャンセルされました。")
+    try:
+        ack()
+        channel_id = _get_channel_id_from_action_body(body)
+        _clear_scan_data(channel_id)
+        say("変更がキャンセルされました。")
+    except Exception as e:
+        logging.exception(f"cancel_text ハンドラーでエラーが発生: {e}")
+    finally:
+        channel_id = _get_channel_id_from_action_body(body)
+        channel_progress.setdefault(channel_id, {"processed": 0, "total": 0})
+        channel_progress[channel_id]["processed"] += 1
+        _process_next_file_for_channel(channel_id, say)
 
 @app.event("message")
 def handle_message_events(body, say, context):
