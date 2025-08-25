@@ -196,6 +196,7 @@ def handle_message_events(body, say, context):
         for f in event["files"]:
             if not is_probably_image(f, bot_token):
                 logging.info(f"画像以外（に見える）のでスキップ: {f.get('name')} ({f.get('mimetype')}/{f.get('filetype')})")
+                say("画像ファイル以外の形式で入力されたため、スキップします。")
                 continue
             url_private = f.get("url_private_download") or f.get("url_private")
             filename = f.get("name", "unknown")
