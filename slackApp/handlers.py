@@ -51,6 +51,12 @@ def handle_save_text(ack, body, say):
         except Exception as say_error:
             logging.exception(f"エラーメッセージの送信にも失敗: {say_error}")
 
+    finally:
+        # 5) 必ず初期化（return ルートでも確実に実行）
+        for k in list(scanData.keys()):
+            scanData[k] = ""
+
+
 @app.action("edit_text")
 def handle_edit_text(ack, body, say):
     try:
@@ -170,6 +176,13 @@ def handle_save_changes(ack, body, say):
             say(f"❌ エラーが発生しました: {str(e)}")
         except Exception as say_error:
             logging.exception(f"エラーメッセージの送信にも失敗: {say_error}")
+
+    finally:
+        # 5) 必ず初期化（return ルートでも確実に実行）
+        for k in list(scanData.keys()):
+            scanData[k] = ""
+
+
 
 @app.event("message")
 def handle_message_events(body, say, context):
