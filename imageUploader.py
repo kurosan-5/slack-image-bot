@@ -13,6 +13,7 @@ s3 = session.client(
     endpoint_url=os.getenv("ENDPOINT_URL"),
 )
 
+
 def upload_file_to_r2(local_path, file_name):
     bucket_name = os.getenv("R2_BUCKET_NAME")
     with open(local_path, "rb") as f:
