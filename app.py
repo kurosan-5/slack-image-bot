@@ -3,8 +3,6 @@ import logging
 import time
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
-from slack_sdk.oauth.installation_store.file import FileInstallationStore
-from slack_sdk.oauth.state_store.file import FileOAuthStateStore
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.oauth.state_store.sqlalchemy import SQLAlchemyOAuthStateStore
 from sqlalchemy import create_engine
@@ -13,11 +11,12 @@ from slack_bolt.oauth.oauth_settings import OAuthSettings
 from flask import Flask, request
 from dotenv import load_dotenv
 import requests
-import csv
 from urllib.parse import urlencode
 import json
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
+from datetime import datetime, timezone, timedelta
+
 # Gemini 解析
 from gemini import extract_from_bytes
 
@@ -58,31 +57,7 @@ load_dotenv()
 # ----------------- OAuth 設定 -----------------
 def create_oauth_settings():
     database_url = os.environ.get("DATABASE_URL")
-
-    # SQLAlchemy Engine を作成（接続プール設定付き）
-    try:
-        engine = create_engine(
-            database_url,
-            # 接続プール設定
-            pool_size=5,                    # 基本的な接続プールサイズ
-            max_overflow=10,                # 追加で作成可能な接続数
-            pool_timeout=30,                # 接続取得のタイムアウト（秒）
-            pool_recycle=1800,              # 接続を再利用する前にリサイクルする時間（30分）
-            pool_pre_ping=True,             # 接続使用前にpingテストを実行
-            # 接続タイムアウト設定
-            connect_args={
-                "connect_timeout": 30,      # 接続タイムアウト
-                "keepalives_idle": 120,     # keepalive開始までの時間
-                "keepalives_interval": 30,  # keepaliveの間隔
-                "keepalives_count": 3,      # keepaliveの試行回数
-            }
-        )
-        # 接続テスト
-        with engine.connect():
-            safe_log_info("データベース接続テスト成功")
-    except Exception as e:
-        logger.exception(f"データベース接続エラー: {e}")
-        raise
+    engine = create_engine(database_url)
 
     installation_store = SQLAlchemyInstallationStore(
         client_id=os.environ["SLACK_CLIENT_ID"],
@@ -93,6 +68,20 @@ def create_oauth_settings():
         engine=engine,
         expiration_seconds=600,
         logger=logger,
+    )
+
+    installation_store.create_tables()
+    state_store.create_tables()
+
+    return OAuthSettings(
+        client_id=os.environ["SLACK_CLIENT_ID"],
+        client_secret=os.environ["SLACK_CLIENT_SECRET"],
+        scopes=[
+            "app_mentions:read","channels:read","chat:write",
+            "files:read","im:history","im:read","im:write",
+        ],
+        installation_store=installation_store,
+        state_store=state_store,
     )
 
     return OAuthSettings(
@@ -215,125 +204,85 @@ def is_probably_image(slack_file: dict, bot_token: str) -> bool:
 
     return False
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    # createしないなら drive.file は不要。残してもOK
-]
+# ----------------- Google Sheets ヘルパー -----------------
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 def get_gsheet_client():
-    creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_env = os.environ.get("GOOGLE_CREDENTIALS")          # JSON文字列（1行）
+    creds_file = os.environ.get("GOOGLE_CREDENTIALS_FILE")    # JSONファイルのパス
+    if creds_env:
+        try:
+            creds_dict = json.loads(creds_env)
+        except Exception as e:
+            raise RuntimeError(f"GOOGLE_CREDENTIALS がJSONとして読み込めません: {e}")
+    elif creds_file:
+        try:
+            with open(creds_file, "r", encoding="utf-8") as f:
+                creds_dict = json.load(f)
+        except Exception as e:
+            raise RuntimeError(f"GOOGLE_CREDENTIALS_FILE の読込に失敗: {e}")
+    else:
+        raise RuntimeError("GOOGLE_CREDENTIALS か GOOGLE_CREDENTIALS_FILE を設定してください。")
+
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPES)
     return gspread.authorize(creds)
 
-def export_to_existing_sheet(data):
+def get_worksheet():
+    """SPREADSHEET_ID と SHEET_NAME からワークシートを取得（無ければ作成）。"""
     gc = get_gsheet_client()
     spreadsheet_id = os.environ["SPREADSHEET_ID"]
+    sheet_name = os.environ.get("SHEET_NAME", "Sheet1")
+
     sh = gc.open_by_key(spreadsheet_id)
-    ws = sh.get_worksheet(0) or sh.add_worksheet(title="Sheet1", rows="100", cols="26")
-    ws.clear()
-    ws.update("A1", data)
-    return sh.url
+    try:
+        ws = sh.worksheet(sheet_name)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=sheet_name, rows="1000", cols="20")
+    return ws
 
-# data = [
-#     ["Name", "Email", "Message"],
-#     ["Alice", "alice@example.com", "Hello!"],
-#     ["Bob", "bob@example.com", "Hi there!"]
-# ]
+HEADER = [
+    "timestamp_jst",
+    "source",        # "slack"
+    "slack_user",    # 表示名（可能なら）/ ユーザID
+    "name_jp",
+    "name_en",
+    "company",
+    "postal_code",
+    "address",
+    "email",
+    "website",
+    "phone",
+]
 
-# sheet_url = export_to_existing_sheet(data)
-# print(f"Google Sheets URL: {sheet_url}")
+def ensure_header(ws):
+    """先頭行にヘッダを整備。既存ヘッダが空または不一致なら置き換える。"""
+    existing = ws.row_values(1)
+    if len(existing) < len(HEADER) or existing[:len(HEADER)] != HEADER:
+        ws.update("A1", [HEADER])
 
-# ----------------- ルーティング（OAuth / Events） -----------------
-@flask_app.route("/")
-def root():
-    safe_log_info("ルートパス（/）にアクセスされました")
-    return '''
-    <html>
-        <head>
-            <title>Slack Image Bot</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
-                .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                h1 { color: #4A154B; margin-bottom: 20px; }
-                p { line-height: 1.6; color: #333; }
-                .status { padding: 10px; background-color: #28a745; color: white; border-radius: 4px; margin: 20px 0; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🤖 Slack Image Bot</h1>
-                <div class="status">✅ サーバーは正常に動作中です</div>
-                <p>このボットは画像をアップロードしてテキスト解析を行うSlackアプリです。</p>
-                <p><strong>機能:</strong></p>
-                <ul>
-                    <li>画像からのテキスト抽出</li>
-                    <li>Gmail作成支援</li>
-                    <li>データ管理</li>
-                </ul>
-            </div>
-        </body>
-    </html>
-    '''
+def append_record_to_sheet(record: dict, slack_user_label: str = ""):
+    """名刺情報1件を1行追記。"""
+    ws = get_worksheet()
+    ensure_header(ws)
 
-@flask_app.route("/robots.txt", methods=["GET"])
-def robots_txt():
-    safe_log_info("robots.txt にアクセスされました")
-    return "User-agent: *\nDisallow: /\n", 200, {'Content-Type': 'text/plain'}
+    # JST タイムスタンプ
+    jst = timezone(timedelta(hours=9))
+    ts = datetime.now(jst).strftime("%Y-%m-%d %H:%M:%S")
 
-@flask_app.route("/favicon.ico", methods=["GET"])
-def favicon():
-    safe_log_info("favicon.ico にアクセスされました")
-    return "", 204  # No Content
-
-# 一般的なボット攻撃パスを処理
-@flask_app.route("/<path:path>", methods=["GET", "POST"])
-def catch_all(path):
-    # WordPress、admin、API攻撃などをブロック
-    blocked_patterns = [
-        'wp-', 'admin', 'login', 'config', '.env', 'api/v1',
-        'graphql', 'xmlrpc', 'phpmyadmin', '.git', 'swagger'
+    row = [
+        ts,
+        "slack",
+        slack_user_label,
+        record.get("name_jp", ""),
+        record.get("name_en", ""),
+        record.get("company", ""),
+        record.get("postal_code", ""),
+        record.get("address", ""),
+        record.get("email", ""),
+        record.get("website", ""),
+        record.get("phone", ""),
     ]
-
-    if any(pattern in path.lower() for pattern in blocked_patterns):
-        logger.warning(f"ブロックされたパス: {request.method} /{path} from {request.remote_addr}")
-        return {"error": "Forbidden"}, 403
-
-    logger.warning(f"未定義のパス: {request.method} /{path} from {request.remote_addr}")
-    return {"error": "Not Found", "message": f"Path /{path} not found"}, 404
-
-@flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    try:
-        result = handler.handle(request)
-        return result
-    except Exception as e:
-        logger.exception(f"Slack events エンドポイントでエラー: {e}")
-        # エラーでも適切なレスポンスを返す
-        return {"error": "Internal Server Error"}, 500
-
-@flask_app.route("/slack/install", methods=["GET"])
-def install():
-    try:
-        result = handler.handle(request)
-        return result
-    except Exception as e:
-        logger.exception(f"Slack install エンドポイントでエラー: {e}")
-        raise
-
-@flask_app.route("/slack/oauth_redirect", methods=["GET"])
-def oauth_redirect():
-    try:
-        result = handler.handle(request)
-        return result
-    except Exception as e:
-        logger.exception(f"Slack oauth_redirect エンドポイントでエラー: {e}")
-        raise
-
-@flask_app.route("/health", methods=["GET"])
-def health_check():
-    """アプリケーションとデータベースの健康状態をチェック"""
-    status = {"status": "ok", "message": "Application is running"}
-    return status
+    ws.append_row(row, value_input_option="USER_ENTERED")
 
 # ----------------- 表示用データ（Gemini結果が入る） -----------------
 scanData = {
@@ -347,34 +296,56 @@ scanData = {
     "phone": "",
 }
 
+# ----------------- ルーティング（OAuth / Events） -----------------
+@flask_app.route("/slack/events", methods=["POST"])
+def slack_events():
+    return handler.handle(request)
+
+@flask_app.route("/slack/install", methods=["GET"])
+def install():
+    return handler.handle(request)
+
+@flask_app.route("/slack/oauth_redirect", methods=["GET"])
+def oauth_redirect():
+    return handler.handle(request)
+
 # ----------------- ハンドラ -----------------
 @app.action("save_text")
-def handle_save_text(ack, body, say):
+def handle_save_text(ack, body, say, client, context):
+    ack()
+
+    # Slackユーザ表記（display_name があれば優先）
+    user_id = body.get("user", {}).get("id") or body.get("user", "")
+    user_label = user_id
     try:
-        ack()
-        # データの検証
-        if not scanData.get('email'):
-            say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
-            return
+        if user_id:
+            prof = client.users_info(user=user_id).get("user", {}).get("profile", {})
+            display = prof.get("display_name") or prof.get("real_name")
+            if display:
+                user_label = f"{display} ({user_id})"
+    except Exception:
+        pass
 
-        say("保存しました。")
+    try:
+        append_record_to_sheet(scanData, slack_user_label=user_label)
+        say("スプレッドシートに保存しました。")
+    except Exception as e:
+        logger.exception("Sheets への保存に失敗しました")
+        say(f"保存に失敗しました: {e}")
 
-        body_template = (
-            f"こんにちは、{scanData['name_jp']}さん。\n"
-            f"会社名: {scanData['company']}\n"
-            f"会社住所: {scanData['address']}\n"
-            f"Email: {scanData['email']}\n"
-            f"ウェブサイト: {scanData['website']}\n"
-            f"電話番号: {scanData['phone']}"
-        )
-
-        safe_log_info(f"Gmail作成用のメールアドレス: {scanData['email']}")
-
-        url = gmail_compose_url(
-            to=scanData["email"],
-            subject=f"{scanData['name_jp']}さんの名刺情報",
-            body=body_template,
-        )
+    body_template = (
+        f"こんにちは、{scanData['name_jp']}さん。\n"
+        f"会社名: {scanData['company']}\n"
+        f"会社住所: {scanData['address']}\n"
+        f"Email: {scanData['email']}\n"
+        f"ウェブサイト: {scanData['website']}\n"
+        f"電話番号: {scanData['phone']}"
+    )
+    url = gmail_compose_url(
+        to=scanData.get("email", ""),
+        subject=f"{scanData.get('name_jp','')}さんの名刺情報",
+        body=body_template,
+    )
 
         say(
             blocks=[
@@ -454,65 +425,62 @@ def handle_edit_text(ack, body, say):
             logger.exception(f"エラーメッセージの送信にも失敗: {say_error}")
 
 @app.action("save_changes")
-def handle_save_changes(ack, body, say):
+def handle_save_changes(ack, body, say, client):
+    ack()
+    changes = []
+    for block in body["state"]["values"]:
+        block_data = body["state"]["values"][block]
+        for key, value in block_data.items():
+            display_key = ""
+            if key == "name":
+                display_key = "名前"
+                scanData["name_jp"] = value["value"]
+            elif key == "company":
+                display_key = "会社名"
+                scanData["company"] = value["value"]
+            elif key == "address":
+                display_key = "会社住所"
+                scanData["address"] = value["value"]
+            elif key == "email":
+                display_key = "Email"
+                scanData["email"] = value["value"]
+            elif key == "phone":
+                display_key = "電話番号"
+                scanData["phone"] = value["value"]
+            changes.append(f"{display_key}: {value['value']}")
+    say("変更内容を保存しました:\n" + "\n".join(changes))
+
+    # 変更後の内容でシートへ追記（編集のたびに履歴が残る運用）
+    user_id = body.get("user", {}).get("id") or body.get("user", "")
+    user_label = user_id
     try:
-        ack()
-        changes = []
-        state_values = body.get("state", {}).get("values", {})
+        if user_id:
+            prof = client.users_info(user=user_id).get("user", {}).get("profile", {})
+            display = prof.get("display_name") or prof.get("real_name")
+            if display:
+                user_label = f"{display} ({user_id})"
+    except Exception:
+        pass
+    try:
+        append_record_to_sheet(scanData, slack_user_label=user_label)
+        say("スプレッドシートにも追記しました。")
+    except Exception as e:
+        logger.exception("Sheets への保存に失敗しました")
+        say(f"保存に失敗しました: {e}")
 
-        if not state_values:
-            logger.warning("state.values が空です")
-            say("❌ フォームデータが取得できませんでした。もう一度お試しください。")
-            return
-
-        for block in state_values:
-            block_data = state_values[block]
-            for key, value in block_data.items():
-                display_key = ""
-                new_value = value.get("value", "")
-
-                if key == "name":
-                    display_key = "名前"
-                    scanData["name_jp"] = new_value
-                elif key == "company":
-                    display_key = "会社名"
-                    scanData["company"] = new_value
-                elif key == "address":
-                    display_key = "会社住所"
-                    scanData["address"] = new_value
-                elif key == "email":
-                    display_key = "Email"
-                    scanData["email"] = new_value
-                elif key == "phone":
-                    display_key = "電話番号"
-                    scanData["phone"] = new_value
-
-                if display_key:
-                    changes.append(f"{display_key}: {new_value}")
-                    safe_log_info(f"{display_key} を {new_value} に更新")
-
-        say("変更内容を保存しました:\n" + "\n".join(changes))
-
-        body_template = (
-            f"こんにちは、{scanData['name_jp']}さん。\n"
-            f"会社名: {scanData['company']}\n"
-            f"会社住所: {scanData['address']}\n"
-            f"Email: {scanData['email']}\n"
-            f"ウェブサイト: {scanData['website']}\n"
-            f"電話番号: {scanData['phone']}"
-        )
-
-        if not scanData.get('email'):
-            say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
-            return
-
-        url = gmail_compose_url(
-            to=scanData["email"],
-            subject=f"{scanData['name_jp']}さんの名刺情報",
-            body=body_template,
-        )
-
-        safe_log_info(f"生成されたGmail URL: {url}")
+    body_template = (
+        f"こんにちは、{scanData['name_jp']}さん。\n"
+        f"会社名: {scanData['company']}\n"
+        f"会社住所: {scanData['address']}\n"
+        f"Email: {scanData['email']}\n"
+        f"ウェブサイト: {scanData['website']}\n"
+        f"電話番号: {scanData['phone']}"
+    )
+    url = gmail_compose_url(
+        to=scanData.get("email",""),
+        subject=f"{scanData.get('name_jp','')}さんの名刺情報",
+        body=body_template,
+    )
 
         say(
             blocks=[
@@ -551,8 +519,6 @@ def handle_message_events(body, say, context):
                 continue
 
             url_private = f.get("url_private_download") or f.get("url_private")
-            filename = f.get("name", "unknown")
-
             try:
                 image_bytes = fetch_slack_private_file(url_private, bot_token)
             except Exception:
