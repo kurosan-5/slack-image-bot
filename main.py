@@ -1,5 +1,4 @@
 # Flaskサーバーのエントリーポイント
-
 from config.logging import setup_logging
 import os
 import logging
