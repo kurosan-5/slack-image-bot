@@ -5,8 +5,10 @@ import logging
 import os
 from collections import deque
 from google.sheets import append_record_to_sheet
-scanData = {
-    "name": "",
+
+# 旧 scanData の後継（チャンネル単位で使うテンプレート）
+SCAN_DATA_TEMPLATE = {
+    "name": "",       # 表示用・保存用の名前（単一）
     "company": "",
     "postal_code": "",
     "address": "",
@@ -112,8 +114,8 @@ def _process_next_file_for_channel(channel_id: str, say):
             logging.info(f"Gemini解析結果: {parsed}")
             ch_data = _get_scan_data(channel_id)
             ch_data.update({
-                "name_jp":     parsed.get("name_jp", "")     or ch_data.get("name_jp", ""),
-                "name_en":     parsed.get("name_en", "")     or ch_data.get("name_en", ""),
+                # 単一の name に統一
+                "name":       (parsed.get("name", "") or ch_data.get("name", "")),
                 "company":     parsed.get("company", "")     or ch_data.get("company", ""),
                 "postal_code": parsed.get("postal_code", "") or ch_data.get("postal_code", ""),
                 "address":     parsed.get("address", "")     or ch_data.get("address", ""),
@@ -122,8 +124,10 @@ def _process_next_file_for_channel(channel_id: str, say):
                 "phone":       parsed.get("phone", "")       or ch_data.get("phone", ""),
             })
             say("読み取り完了。\n")
-            say(f"名前: {ch_data['name_jp']}")
+            display_name = ch_data.get("name")
+            say(f"名前: {display_name}")
             say(f"会社名: {ch_data['company']}")
+            say(f"郵便番号: {ch_data['postal_code']}")
             say(f"会社住所: {ch_data['address']}")
             say(f"Email: {ch_data['email']}")
             say(f"ウェブサイト: {ch_data['website']}")
@@ -203,10 +207,9 @@ def handle_save_text(ack, body, say):
             logging.exception(f"エラーメッセージの送信にも失敗: {say_error}")
     finally:
         # 5) 必ず初期化（return ルートでも確実に実行）
-        _clear_scan_data(channel_id)
-            # 次のファイルへ
         channel_id = _get_channel_id_from_action_body(body)
-        # processed を進める
+        _clear_scan_data(channel_id)
+        # 次のファイルへ（processed を進める）
         channel_progress.setdefault(channel_id, {"processed": 0, "total": 0})
         channel_progress[channel_id]["processed"] += 1
         _process_next_file_for_channel(channel_id, say)
@@ -216,49 +219,51 @@ def handle_save_text(ack, body, say):
 def handle_edit_text(ack, body, say):
     try:
         ack()
+        channel_id = _get_channel_id_from_action_body(body)
+        ch_data = _get_scan_data(channel_id)
         say("該当項目を変更してください。")
         editBlocks = [
             {
                 "type": "input",
                 "block_id": "edit_name",
                 "label": {"type": "plain_text", "text": "名前"},
-                "element": {"type": "plain_text_input", "action_id": "name", "initial_value": f"{scanData['name']}"},
+                "element": {"type": "plain_text_input", "action_id": "name", "initial_value": f"{ch_data['name']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_company",
                 "label": {"type": "plain_text", "text": "会社名"},
-                "element": {"type": "plain_text_input", "action_id": "company", "initial_value": f"{scanData['company']}"},
+                "element": {"type": "plain_text_input", "action_id": "company", "initial_value": f"{ch_data['company']}"},
             },
-                        {
+            {
                 "type": "input",
                 "block_id": "edit_postal_code",
                 "label": {"type": "plain_text", "text": "郵便番号"},
-                "element": {"type": "plain_text_input", "action_id": "postal_code", "initial_value": f"{scanData['postal_code']}"},
+                "element": {"type": "plain_text_input", "action_id": "postal_code", "initial_value": f"{ch_data['postal_code']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_address",
                 "label": {"type": "plain_text", "text": "会社住所"},
-        "element": {"type": "plain_text_input", "action_id": "address", "initial_value": f"{scanData['address']}"},
+                "element": {"type": "plain_text_input", "action_id": "address", "initial_value": f"{ch_data['address']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_email",
                 "label": {"type": "plain_text", "text": "Email"},
-                "element": {"type": "plain_text_input", "action_id": "email", "initial_value": f"{scanData['email']}"},
+                "element": {"type": "plain_text_input", "action_id": "email", "initial_value": f"{ch_data['email']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_website",
                 "label": {"type": "plain_text", "text": "ウェブサイト"},
-                "element": {"type": "plain_text_input", "action_id": "website", "initial_value": f"{scanData['website']}"},
+                "element": {"type": "plain_text_input", "action_id": "website", "initial_value": f"{ch_data['website']}"},
             },
             {
                 "type": "input",
                 "block_id": "edit_phone",
                 "label": {"type": "plain_text", "text": "電話番号"},
-        "element": {"type": "plain_text_input", "action_id": "phone", "initial_value": f"{scanData['phone']}"},
+                "element": {"type": "plain_text_input", "action_id": "phone", "initial_value": f"{ch_data['phone']}"},
             },
             {
                 "type": "actions",
@@ -299,22 +304,22 @@ def handle_save_changes(ack, body, say):
                 new_value = value.get("value", "")
                 if key == "name":
                     display_key = "名前"
-                    scanData["name"] = new_value
+                    ch_data["name"] = new_value
                 elif key == "company":
                     display_key = "会社名"
-                    scanData["company"] = new_value
+                    ch_data["company"] = new_value
                 elif key == "postal_code":
-                    diplay_key = "郵便番号"
-                    scanData["postal_code"] = new_value
+                    display_key = "郵便番号"
+                    ch_data["postal_code"] = new_value
                 elif key == "address":
                     display_key = "会社住所"
                     ch_data["address"] = new_value
                 elif key == "email":
                     display_key = "Email"
-                    scanData["email"] = new_value
+                    ch_data["email"] = new_value
                 elif key == "website":
                     display_key = "ウェブサイト"
-                    scanData["website"] = new_value
+                    ch_data["website"] = new_value
                 elif key == "phone":
                     display_key = "電話番号"
                     ch_data["phone"] = new_value
@@ -340,9 +345,9 @@ def handle_save_changes(ack, body, say):
             say(f"保存に失敗しました: {e}")
 
         if not ch_data.get('email'):
-                say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
-                # 次のファイルへ
-                return
+            say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
+            # 次のファイルへ
+            return
 
         send_mail_link(ch_data, say)
 
@@ -355,10 +360,9 @@ def handle_save_changes(ack, body, say):
 
     finally:
         # 5) 必ず初期化（return ルートでも確実に実行）
-        _clear_scan_data(channel_id)
-            # 次のファイルへ
         channel_id = _get_channel_id_from_action_body(body)
-        # processed を進める
+        _clear_scan_data(channel_id)
+        # 次のファイルへ（processed を進める）
         channel_progress.setdefault(channel_id, {"processed": 0, "total": 0})
         channel_progress[channel_id]["processed"] += 1
         _process_next_file_for_channel(channel_id, say)
@@ -380,16 +384,17 @@ def handle_message_events(body, say, context):
         if q is None:
             q = deque()
             channel_queues[channel_id] = q
-    # 進捗 total を加算
-    channel_progress.setdefault(channel_id, {"processed": 0, "total": 0})
-    channel_progress[channel_id]["total"] += len(event["files"])
 
-    for f in event["files"]:
-        q.append(f)
-        # token を保持
-        channel_tokens[channel_id] = bot_token
-        # 進行中でなければ最初の1件だけ処理開始
-        if not channel_processing.get(channel_id):
-            _process_next_file_for_channel(channel_id, say)
-        else:
-            logging.info("通常メッセージ: " + event.get("text", "（テキストなし）"))
+        # 進捗 total を加算
+        channel_progress.setdefault(channel_id, {"processed": 0, "total": 0})
+        channel_progress[channel_id]["total"] += len(event.get("files", []))
+
+        for f in event.get("files", []):
+            q.append(f)
+            # token を保持
+            channel_tokens[channel_id] = bot_token
+            # 進行中でなければ最初の1件だけ処理開始
+            if not channel_processing.get(channel_id):
+                _process_next_file_for_channel(channel_id, say)
+    else:
+        logging.info("通常メッセージ: " + event.get("text", "（テキストなし）"))

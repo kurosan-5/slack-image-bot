@@ -34,9 +34,11 @@ def is_probably_image(slack_file: dict, bot_token: str) -> bool:
     return False
 
 def send_mail_link(scanData, say):
+    display_name = scanData.get('name', '')
     body_template = (
-            f"こんにちは、{scanData['name_jp']}さん。\n"
+            f"こんにちは、{display_name}さん。\n"
             f"会社名: {scanData['company']}\n"
+            f"郵便番号: {scanData['postal_code']}\n"
             f"会社住所: {scanData['address']}\n"
             f"Email: {scanData['email']}\n"
             f"ウェブサイト: {scanData['website']}\n"
@@ -44,12 +46,12 @@ def send_mail_link(scanData, say):
     )
     url_mobile = gmail_compose_url_mobile(
         to=scanData["email"],
-        subject=f"{scanData['name_jp']}さんの名刺情報",
+        subject=f"{display_name}さんの名刺情報",
         body=body_template,
     )
     url_PC = gmail_compose_url_PC(
         to=scanData["email"],
-        subject=f"{scanData['name_jp']}さんの名刺情報",
+        subject=f"{display_name}さんの名刺情報",
         body=body_template,
     )
     say(
