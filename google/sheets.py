@@ -30,8 +30,7 @@ HEADER = [
     "timestamp_jst",
     "source",        # "slack"
     "slack_user",    # 表示名（可能なら）/ ユーザID
-    "name_jp",
-    "name_en",
+    "name",
     "company",
     "postal_code",
     "address",
@@ -59,8 +58,7 @@ def append_record_to_sheet(record: dict, slack_user_label: str = ""):
         ts,
         "slack",
         slack_user_label,
-        record.get("name_jp", ""),
-        record.get("name_en", ""),
+        record.get("name", ""),
         record.get("company", ""),
         record.get("postal_code", ""),
         record.get("address", ""),
