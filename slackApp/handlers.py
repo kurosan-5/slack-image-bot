@@ -147,6 +147,11 @@ def _process_next_file_for_channel(channel_id: str, say):
                             "text": {"type": "plain_text", "text": "変更する"},
                             "action_id": "edit_text"
                         },
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "キャンセル"},
+                            "action_id": "cancel_text"
+                        },
                     ],
                 }
             ]
@@ -367,7 +372,12 @@ def handle_save_changes(ack, body, say):
         channel_progress[channel_id]["processed"] += 1
         _process_next_file_for_channel(channel_id, say)
 
-
+@app.action("cancel_text")
+def handle_cancel_text(ack, body, say):
+    ack()
+    channel_id = _get_channel_id_from_action_body(body)
+    _clear_scan_data(channel_id)
+    say("変更がキャンセルされました。")
 
 @app.event("message")
 def handle_message_events(body, say, context):
