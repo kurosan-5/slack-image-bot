@@ -25,7 +25,9 @@ SCHEMA = {
 
 SYSTEM_PROMPT = (
   "You are a precise business card parser for Japanese and English cards. "
-  "Return strict JSON per the schema. Missing fields should be empty strings."
+  "Return strict JSON per the schema. Missing fields should be empty strings. "
+  "The postal_code field must contain the postal code only. "
+  "Do not include the postal code in the address field."
 )
 
 def _bytes_to_pil(b: bytes) -> Image.Image:
