@@ -4,7 +4,7 @@ from slackApp.utils import fetch_slack_private_file, is_probably_image
 from AIParcer.parser import extract_from_bytes
 import logging
 import os
-
+from google.sheets import append_record_to_sheet
 scanData = {
     "name_jp": "",
     "name_en": "",
@@ -20,10 +20,29 @@ scanData = {
 def handle_save_text(ack, body, say):
     try:
         ack()
-        say("保存しました。")
+        # Slackユーザ表記（display_name があれば優先）
+        user_id = body.get("user", {}).get("id") or body.get("user", "")
+        user_label = user_id
+        try:
+            if user_id:
+                prof = client.users_info(user=user_id).get("user", {}).get("profile", {})
+                display = prof.get("display_name") or prof.get("real_name")
+                if display:
+                    user_label = f"{display} ({user_id})"
+        except Exception:
+            pass
+
+        try:
+            append_record_to_sheet(scanData, slack_user_label=user_label)
+            say("スプレッドシートに保存しました。")
+        except Exception as e:
+            logger.exception("Sheets への保存に失敗しました")
+            say(f"保存に失敗しました: {e}")
+
         if not scanData.get('email'):
             say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
             return
+
         body_template = (
             f"こんにちは、{scanData['name_jp']}さん。\n"
             f"会社名: {scanData['company']}\n"
@@ -142,10 +161,28 @@ def handle_save_changes(ack, body, say):
                 if display_key:
                     changes.append(f"{display_key}: {new_value}")
                     logging.info(f"{display_key} を {new_value} に更新")
-        say("変更内容を保存しました:\n" + "\n".join(changes))
+        # 変更後の内容でシートへ追記（編集のたびに履歴が残る運用）
+        user_id = body.get("user", {}).get("id") or body.get("user", "")
+        user_label = user_id
+        try:
+            if user_id:
+                prof = client.users_info(user=user_id).get("user", {}).get("profile", {})
+                display = prof.get("display_name") or prof.get("real_name")
+                if display:
+                    user_label = f"{display} ({user_id})"
+        except Exception:
+            pass
+        try:
+            append_record_to_sheet(scanData, slack_user_label=user_label)
+            say("スプレッドシートにも追記しました。")
+        except Exception as e:
+            logging.exception("Sheets への保存に失敗しました")
+            say(f"保存に失敗しました: {e}")
+
         if not scanData.get('email'):
             say("メールアドレスが読み取れなかったため、Gmail作成リンクを生成できません。")
             return
+
         body_template = (
             f"こんにちは、{scanData['name_jp']}さん。\n"
             f"会社名: {scanData['company']}\n"
@@ -159,7 +196,6 @@ def handle_save_changes(ack, body, say):
             subject=f"{scanData['name_jp']}さんの名刺情報",
             body=body_template,
         )
-        logging.info(f"生成されたGmail URL: {url}")
         say(
             blocks=[
                 {"type": "section", "text": {"type": "mrkdwn", "text": "保存した内容をもとにGmailを送信:"}},
@@ -169,7 +205,6 @@ def handle_save_changes(ack, body, say):
             ],
             text=f"Gmail作成リンク: {url}",
         )
-        logging.info("Gmail作成リンク送信完了")
     except Exception as e:
         logging.exception(f"save_changes ハンドラーでエラーが発生: {e}")
         try:
