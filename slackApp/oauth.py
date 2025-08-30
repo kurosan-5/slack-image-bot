@@ -43,13 +43,10 @@ def create_oauth_settings():
         client_id=os.environ["SLACK_CLIENT_ID"],
         client_secret=os.environ["SLACK_CLIENT_SECRET"],
         scopes=[
-            "app_mentions:read",
-            "channels:read",
             "chat:write",
             "files:read",
             "im:history",
             "im:read",
-            "im:write",
         ],
         installation_store=installation_store,
         state_store=state_store,
